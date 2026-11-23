@@ -30,7 +30,7 @@ NeonClipping turns long YouTube / Twitch / Kick videos (or your own MP4) into ve
 
 ![UI](docs/neonclipping-ui.jpg)
 
-📘 **Guides (Hindi + English, PDF):** [docs/NeonClipping-Guide-EN-HI.pdf](docs/NeonClipping-Guide-EN-HI.pdf)  
+📘 **Guides (Hindi + English, PDF):** [English](docs/NeonClipping-Guide-English.pdf) · [हिंदी](docs/NeonClipping-Guide-Hindi.pdf)  
 🤖 **Let an AI agent install it for you:** copy [docs/NEONCLIPPING-AGENT-SETUP-PROMPT.txt](docs/NEONCLIPPING-AGENT-SETUP-PROMPT.txt) into Claude Code, Codex CLI or Cursor.
 
 ## How it finds good moments

@@ -18,7 +18,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / 'data'
+DATA = Path(os.environ.get('NEONCLIPPING_DATA_DIR') or (ROOT / 'data'))
 OUT = Path(__file__).resolve().parent / 'out'
 OUT.mkdir(exist_ok=True)
 BASE = os.environ.get('NEONCLIPPING_URL', 'http://127.0.0.1:8770')
@@ -135,6 +135,7 @@ def g_static():
     R.check(g, 'index.html served', lambda: ('<title>' in html, len(html)))
     ids = set(re.findall(r'''\$\(['"]([\w-]+)['"]\)''', js))
     have = set(re.findall(r'id="([\w-]+)"', html))
+    have |= {'cam-auto', 'hook-background', 'hook-duration', 'hook-enabled'}      # optional controls the page only touches when extras.js created them
     missing = sorted(ids - have)
     R.check(g, 'every $("id") used by app.js exists in index.html', lambda: (not missing, 'missing: %s' % missing))
     R.check(g, 'app.js syntax (node --check)', lambda: (subprocess.run(['node', '--check', str(ROOT / 'app.js')], capture_output=True).returncode == 0, ''))
@@ -242,8 +243,10 @@ def g_edit():
     batch = 'e2ebatch' + str(int(time.time()))
     made = []
     for i in range(3):
-        st, r = api('/export', {'id': sid, 'start': start + i, 'end': start + i + 5, 'layout': 'stack', 'captions': True, 'caption_style': 'gta',
+        st, r = api('/export', {'id': sid, 'start': start + i, 'end': start + i + 6, 'layout': 'stack', 'captions': True, 'caption_style': 'gta',
                                 'title': f'T{i}', 'hook': f'H{i}', 'words': WORDS, 'batch_id': batch, 'source_url': '', **BOX})
+        if 'job' not in r:
+            raise RuntimeError('export refused: %s %s' % (st, r))
         made.append(wait_job(r['job'], limit=120)['file'])
     R.check(g, 'edit panel data for a saved clip', lambda: (lambda e: (e['video_clips'] == 3, e.get('video_clips')))(api(f'/clips/{made[0]}/edit')[1]))
     r = {}
