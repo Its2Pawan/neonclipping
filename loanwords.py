@@ -7,6 +7,23 @@ entry covers फ़ोन, फोन and फॉन. Add words to LOANWORDS as `d
 LOANWORDS_TEXT = """
 पुलिस police
 पोलिस police
+आर्डर order
+ऑर्डर order
+ऑर्डर्स orders
+मिशन mission
+वांटेड wanted
+स्टार star
+स्टार्स stars
+लेवल level
+बॉस boss
+किल kill
+किल्स kills
+हेडशॉट headshot
+स्ट्रीम stream
+स्ट्रीमर streamer
+चैट chat
+लाइव live
+क्लिप clip
 कॉप cop
 कॉप्स cops
 फोन phone

@@ -89,7 +89,9 @@
       '<button class="mini-btn primary" id="ed-export" disabled>Export changes</button><button class="mini-btn" id="ed-reset" disabled>Reset</button></div></div></div>' +
       '<div class="panel ed-tl"><div class="ed-tools"><button type="button" class="mini-btn" id="ed-split">✂ Split</button><button type="button" class="mini-btn" data-pa="dup">⧉ Duplicate</button><button type="button" class="mini-btn" data-pa="left">◀</button><button type="button" class="mini-btn" data-pa="right">▶</button><button type="button" class="mini-btn warn" data-pa="drop">🗑 Remove</button><span class="muted" id="ed-tl-note"></span></div>' +
       '<div class="ed-lane" id="ed-lane"></div><div class="ed-lane ed-capl" id="ed-capl"></div></div>' +
-      '<div class="panel ed-words"><h3>Transcript</h3><div id="ed-words" class="ed-wordlist"></div></div>' +
+      '<div class="panel ed-words"><h3>Transcript</h3><div id="ed-fixask" class="ed-fixask" hidden></div><div id="ed-words" class="ed-wordlist"></div>' +
+      '<div class="ed-gloss"><div class="ed-gloss-head"><b>Your words</b><small>Fixed once, spelled right in every new clip</small></div><div id="ed-gloss" class="ed-gloss-list"></div>' +
+      '<div class="ed-gloss-add"><input id="ed-gl-from" placeholder="Written as (pulis)" maxlength="60"><span>→</span><input id="ed-gl-to" placeholder="Should be (police)" maxlength="60"><button type="button" class="mini-btn" id="ed-gl-add">Add</button></div></div></div>' +
       '<video id="ed-src" preload="auto" playsinline style="display:none"></video>';
     $('library-view').after(sec);
     $('ed-tabs').innerHTML = [['captions', 'Captions'], ['framing', 'Framing'], ['audio', 'Audio'], ['effects', 'Effects']].map(([k, n]) => '<button type="button" data-tab="' + k + '">' + n + '</button>').join('');
@@ -101,7 +103,7 @@
     $('ed-export').onclick = exportNow; $('ed-play').onclick = togglePlay;
     $('ed-list').onclick = e => { const c = e.target.closest('[data-clip]'); if (c) openClip(c.dataset.clip); };
     $('ed-split').onclick = splitHere;
-    sec.addEventListener('click', onClick); sec.addEventListener('change', onChange);
+    sec.addEventListener('click', onClick); sec.addEventListener('change', onChange); drawGloss();
     document.addEventListener('keydown', e => {
       if (sec.hidden || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName || '') || e.target.isContentEditable) return;
       const k = e.key.toLowerCase();
@@ -360,10 +362,43 @@
   }
   function onChange(e) {
     if (!st) return; const t = e.target;
-    if (t.matches('#ed-words [data-word]')) { const i = Number(t.dataset.word), text = t.value.trim(); if (!text) commit(() => { st.words.splice(i, 1); }); else if (text !== st.words[i].text) commit(() => { st.words[i].text = text; }); return; }
+    if (t.matches('#ed-words [data-word]')) { const i = Number(t.dataset.word), text = t.value.trim(); if (!text) commit(() => { st.words.splice(i, 1); }); else if (text !== st.words[i].text) { const old = st.words[i].text; commit(() => { st.words[i].text = text; }); askAlways(old, text); } return; }
     const key = t.dataset && t.dataset.key; if (!key) return;
     const value = t.type === 'checkbox' ? t.checked : (t.type === 'color' ? t.value.toUpperCase() : t.value); if (st[key] === value) return; commit(() => { st[key] = value; });
   }
+
+  // ---------- your words (glossary): fix a word once, every future caption, hook and title spells it right
+  const strip = t => String(t).replace(/^(?:[^\wऀ-ॿ]|[।॥])+|(?:[^\wऀ-ॿ]|[।॥])+$/g, '');   // ।॥ are punctuation
+  let gloss = [];
+  function drawGloss() {
+    const box = $('ed-gloss'); if (!box) return;
+    box.innerHTML = gloss.length ? gloss.map(g => '<span class="gl"><s>' + esc(g.from) + '</s><i>→</i><b>' + esc(g.to) + '</b><button type="button" data-glrm="' + esc(g.from) + '" title="Stop fixing this word">✕</button></span>').join('')
+      : '<p class="muted">No words yet. Change a word in the transcript and press <b>Always fix</b>, or add one here.</p>';
+  }
+  async function loadGloss() { try { gloss = (await req('/glossary')).words || []; } catch (e) { gloss = []; } drawGloss(); }
+  async function saveGloss(from, to) {
+    try { gloss = (await req('/glossary', { from, to })).words; drawGloss(); return true; }
+    catch (e) { const a = $('ed-fixask'); a.hidden = false; a.innerHTML = '<span class="ed-note">' + esc(e.message) + '</span>'; return false; }
+  }
+  function askAlways(oldText, newText) {
+    const from = strip(oldText), to = strip(newText), a = $('ed-fixask'); if (!a || !from || !to || from === to) return;
+    const same = st.words.filter(w => strip(w.text).toLowerCase() === from.toLowerCase()).length;
+    a.hidden = false; a.dataset.from = from; a.dataset.to = to;
+    a.innerHTML = '<span>Always write <s>' + esc(from) + '</s> as <b>' + esc(to) + '</b>?' + (same ? ' <small>(' + same + ' more in this clip)</small>' : '') + '</span>' +
+      '<button type="button" class="mini-btn hot" data-fix="always">Always fix</button><button type="button" class="mini-btn" data-fix="once">Only here</button>';
+  }
+  async function fixAnswer(kind) {
+    const a = $('ed-fixask'), from = a.dataset.from, to = a.dataset.to; a.hidden = true; if (kind !== 'always') return;
+    if (!(await saveGloss(from, to))) return;
+    if (st.words.some(w => strip(w.text).toLowerCase() === from.toLowerCase()))
+      commit(() => { st.words.forEach(w => { if (strip(w.text).toLowerCase() === from.toLowerCase()) w.text = w.text.replace(strip(w.text), to); }); });
+  }
+  document.addEventListener('click', async e => {
+    const f = e.target.closest('#ed-fixask [data-fix]'); if (f) { fixAnswer(f.dataset.fix); return; }
+    const rm = e.target.closest('[data-glrm]'); if (rm) { try { gloss = (await req('/glossary/remove', { from: rm.dataset.glrm })).words; } catch (x) { } drawGloss(); return; }
+    if (e.target.closest('#ed-gl-add')) { const fr = $('ed-gl-from'), to = $('ed-gl-to'); if (fr.value.trim() && to.value.trim() && await saveGloss(fr.value.trim(), to.value.trim())) { fr.value = ''; to.value = ''; } }
+  });
+  setTimeout(loadGloss, 0);
 
   // ---------- transcript (words as chips; click to jump, edit, remove)
   function drawTranscript() {

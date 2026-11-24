@@ -19,6 +19,7 @@ COMMON = {
  'अच्छा': 'accha', 'ठीक': 'theek', 'सही': 'sahi', 'गलत': 'galat', 'भाई': 'bhai', 'यार': 'yaar', 'दोस्तो': 'dosto', 'चलो': 'chalo', 'चल': 'chal',
  'ओके': 'okay', 'हाँ': 'haan', 'हां': 'haan', 'अरे': 'arre', 'वाह': 'wah', 'मतलब': 'matlab', 'बिल्कुल': 'bilkul', 'लेकिन': 'lekin', 'पर्': 'par',
  'एक': 'ek', 'दो': 'do', 'तीन': 'teen', 'चार': 'char', 'पाँच': 'paanch', 'सच': 'sach', 'बात': 'baat', 'लोग': 'log', 'लोगों': 'logon', 'वीडियो': 'video',
+ 'शायद': 'shayad', 'जानता': 'janta', 'पूरा': 'pura', 'पूरी': 'puri', 'पूरे': 'pure', 'जानती': 'janti', 'जानते': 'jante', 'राजा': 'raja', 'ज़्यादा': 'zyada', 'ज्यादा': 'zyada', 'माँ': 'maa', 'मां': 'maa', 'आ': 'aa', 'जा': 'ja', 'जाओ': 'jao', 'जाना': 'jana', 'आना': 'aana', 'खाना': 'khana', 'पता': 'pata',
  'गेम': 'game', 'प्लीज': 'please', 'सॉरी': 'sorry', 'थैंक्स': 'thanks', 'हेलो': 'hello', 'सब्सक्राइब': 'subscribe', 'चैनल': 'channel',
 }
 
@@ -96,13 +97,23 @@ def word_to_hinglish(word):
     return _casual(out)
 
 def _casual(w):
-    """Everyday Hinglish spelling: pata, mota, haraami, tarike instead of pataa, motaa, haraamee, tareeke."""
-    if len(w) > 3: w = re.sub(r'aa$', 'a', w)
+    """Everyday Hinglish spelling as people type it in chats: ja, kha, pata, mota, haraami, tarike instead of jaa, khaa,
+    pataa, motaa, haraamee, tareeke. Two-letter words (aa = come) keep their spelling."""
+    if len(w) > 2: w = re.sub(r'aa$', 'a', w)
     w = re.sub(r'ee$', 'i', w)
+    w = w.replace('chch', 'cch')                       # saccha, baccha, not sachcha
+
     w = w.replace('ee', 'i') if len(w) > 4 else w
     return w
 
 PUNCT = set('.,!?;:"()[]{}-') | {chr(c) for c in (0x27, 0x2026, 0x964, 0x965, 0x2013, 0x2014, 0x201c, 0x201d, 0x2018, 0x2019)}
+
+def roman_text(text):
+    """A caption word, hook or title with every Devanagari word written in Hinglish; English and other text untouched."""
+    text = str(text or '')
+    if not DEVA.search(text): return text
+    from captions import ascii_fold
+    return ' '.join(ascii_fold(to_hinglish(part)).strip() if DEVA.search(part) else part for part in text.split())
 
 def to_hinglish(token):
     """Convert one word token; Latin tokens and punctuation pass through. Keeps leading/trailing punctuation.

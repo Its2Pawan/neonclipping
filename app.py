@@ -18,6 +18,8 @@ import layouts
 from layouts import CATALOG, geometry, render_graph, text_positions, output_settings
 import captions
 from captions import transcribe, large_v3, write as write_captions, ANIMS, ascii_fold, collapse_repeats
+from translit import DEVA as DEVA_RX
+import glossary
 import styling
 import brands
 import hooks
@@ -166,6 +168,13 @@ def start_export(b,job=None):
    if plan:plan.data=DATA;plan.job=job;g2=plan.graph(graph,src,width,height,dur)
    placement=text_positions(layout,top,position,width,height);hook_y=placement['hook_y'];caption_pos=placement['caption_y'];hook_text=str(b.get('hook',''))
    if plan and plan.template!='none':caption_pos=plan.template_caption_y;hook_text=''
+   fixes=glossary.entries()         # your words list (names, English words said in a Hindi accent): before and after Hinglish
+   words=glossary.fix_words(words,fixes);hook_text=glossary.fix_text(hook_text,fixes)
+   if b.get('language')!='hi':      # Hindi is always written in Roman letters (Hinglish) unless हिंदी was picked on purpose
+    from translit import roman_text
+    words=[dict(w,text=roman_text(w['text'])) for w in words];words=[w for w in words if w['text'].strip()];hook_text=roman_text(hook_text)
+    words=glossary.fix_words(words,fixes);hook_text=glossary.fix_text(hook_text,fixes)
+   saved_text={k:glossary.fix_text(roman_text(glossary.fix_text(str(b.get(k) or ''),fixes)) if b.get('language')!='hi' else glossary.fix_text(str(b.get(k) or ''),fixes),fixes) for k in ('hook','title','post_caption') if b.get(k)}
    ass,srt=write_captions(words,style,DATA,job,hook_text,caption_pos,hook_y,width,height,b.get('caption_anim') or 'highlight',b)
    if words:
     (DATA/(job+'.vtt')).write_text(subtitles.write_track(subtitles.parse_track((DATA/srt).read_text(encoding='utf-8'),allow_overlap=True),'vtt',allow_overlap=True),encoding='utf-8')
@@ -193,7 +202,7 @@ def start_export(b,job=None):
     if r.returncode==0:break
    if r.returncode:raise RuntimeError(r.stderr[-900:])
    finished={'status':'done','file':job,'meta':probe(out),'encoder':encoder[1],'caption_words':len(words),'srt':f'/text/{job}/srt' if words else None}
-   (DATA/(job+'.json')).write_text(json.dumps({'source':id,'settings':{**b,'words':words},'result':finished},indent=2),encoding='utf-8')
+   (DATA/(job+'.json')).write_text(json.dumps({'source':id,'settings':{**b,**saved_text,'words':words},'result':finished},indent=2),encoding='utf-8')
    state[job]=finished
   except Exception as e:state[job]={'status':'error','error':str(e)}
  threading.Thread(target=work,daemon=True).start();return {'job':job}
@@ -476,6 +485,10 @@ def start_make(b, previous=None):
      checkpoint['framing']=[cam_use,game_use,layout_use]
      persist()
     lang=language or ('hinglish' if (video_lang.startswith('hi') or c.get('language')=='hi') else None)
+    if language!='hi':
+     from translit import roman_text
+     c['hook']=roman_text(c.get('hook',''));c['title']=glossary.fix_text(roman_text(glossary.fix_text(c.get('title',''))))
+     if c.get('words') and any(DEVA_RX.search(str(w.get('text',''))) for w in c['words']):lang='hinglish'     # YouTube gave Hindi script although another language was picked
     body={'id':sid2,'start':start,'end':end,'layout':layout_use,'top':(top_h if isinstance(top_h,(int,float)) and .2<=top_h<=.5 else .32),'captions':True,'caption_style':style,'language':language,'hook':(' '.join(to_hinglish(w) for w in c.get('hook','').split()) if lang=='hinglish' else c.get('hook','')),
           'aspect':b.get('aspect','vertical'),'resolution':b.get('resolution',1080),'fps':b.get('fps',0),'title':c.get('title',''),'post_caption':c.get('title',''),'batch_id':job,'source_url':url,'cam':cam_use,'game':game_use,'features':c.get('features'),'weights_used':W,'moment_profile':profile,'focus_brief':focus_brief,'focus_match':c.get('focus_match'),'visual_review':c.get('visual_review')}
     for k in styling.KEYS+brands.KEYS+hooks.KEYS:
@@ -814,6 +827,7 @@ subtitles.attach(app)
 aiparts.attach(app)
 facecam_detect.attach(app,DATA)
 brands.attach(app,DATA)
+glossary.attach(app,DATA)
 hooks.attach(app)
 import transcripts
 transcripts.attach(app,DATA,state,probe,transcribe)

@@ -1,6 +1,8 @@
 # Changelog
 
 ## 2026-11-24
+- **Hindi is always written in Hinglish** (Roman letters) in captions, hooks and titles, even when YouTube gives Hindi script or another caption language was picked. Only the हिंदी option keeps Devanagari. Spelling is chat-style: "ja raha hoon", "saccha", "shayad", "order" (not jaa, sachcha, shaayad, aardar).
+- **Your words:** change a word in the editor's transcript and press **Always fix**; every new clip spells it right from then on (names like Andy, English words said in a Hindi accent). Add or remove words in the editor under *Your words*. Works on YouTube captions and the speech model, before and after Hinglish, and keeps word timings.
 - **8 new caption styles** (Karaoke is the new default, TikTok, Pill, One word, Cinematic, Boxed, Outlined, Comic).
 - **English words stay English in Hinglish captions:** police, phone, game, car... are no longer written as pulis, fon, gem (loanword list in loanwords.py, Hindi endings like -wale handled).
 - **Clips can be deleted easily:** trash button on every card, Select mode in My clips, optional source-video delete. Edit clip opens the frame area again. The facecam is found and selected automatically for a fresh video, and your choices are remembered.
