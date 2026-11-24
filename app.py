@@ -231,6 +231,11 @@ def section_start(audio_file,section_file,expected):
  corr=np.fft.irfft(np.fft.rfft(hay,size)*np.conj(np.fft.rfft(needle,size)),size)[:len(hay)-len(needle)+1]
  return a0+int(np.argmax(corr))/8000
 
+def post_text(c):
+ """Ready-to-paste post text (1G): title, the AI's one-line description, hashtags."""
+ parts=[c.get('title') or '',c.get('description') or '',' '.join('#'+t for t in (c.get('hashtags') or []))]
+ return '\n\n'.join(p for p in parts if p.strip())[:2200]
+
 def axes(f):
  """Four readable 0-100 axes from the scoring features (None = not measured for this clip)."""
  def mean(keys):
@@ -292,6 +297,11 @@ def start_make(b, previous=None):
   began=time.monotonic()
   try:
    from smart import find
+   import games
+   def detect_game():
+    try:up=(info.get('channel') or info.get('uploader') or '') if url else ''
+    except NameError:up=''
+    return games.detect(b.get('game_name') if isinstance(b.get('game_name'),str) else '',title,up,'' if url else getattr(src0,'name',''))
    fast=False;title='';yt_words=None;video_lang=''
    cached=previous and previous.get('plan')
    completed=previous.get('completed',{}) if cached else {}
@@ -411,7 +421,8 @@ def start_make(b, previous=None):
       time.sleep(4)
       if beat['live'] and time.monotonic()-beat['seen']>=4:save(job,{'stage':f'Finding moments in audio · working {int(time.monotonic()-t0)}s (long videos take a few minutes)'})
     threading.Thread(target=heartbeat,daemon=True).start()
-    try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases)
+    game_name,game_tags=detect_game()
+    try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name)
     finally:beat['live']=False
     found=choose(found,lambda c:lowres_section(url,c))
     if not found:
@@ -423,12 +434,17 @@ def start_make(b, previous=None):
      save(job,{'stage':'Downloading source ('+quality_label(src_h)+')','progress':.02});sid,p=app.neon['download'](url,job,src_h)
     else:sid,p=src0.stem,src0
     meta=probe(p);duration=meta['duration'];save(job,{'source_id':sid,'meta':meta,'stage':'Finding moments','progress':.1})
-    found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases)
+    game_name,game_tags=detect_game()
+    found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name)
     found=choose(found,lambda c:(p,c['start']))
     if not found:
      checkpoint_path.unlink(missing_ok=True)
      save(job,{'status':'done','stage':'No moments matched the transcript filters. Broaden the focus or required phrases.','progress':1,'clips':[],'elapsed_seconds':round(time.monotonic()-began,2)});return
     save(job,{'engine':engine,'stage':'Rendering clips','progress':.6,'candidates':len(found)})
+   if not cached:      # 1F: the game's own tags go first on every post, whatever the AI wrote
+    for c in found:
+     seen=set();c['hashtags']=[x for x in list(game_tags)+list(c.get('hashtags') or []) if not (x.lower() in seen or seen.add(x.lower()))][:8]
+    if game_name:save(job,{'game':game_name})
    done=[];cam_use,game_use,cam_checked,layout_use=cam,game,not b.get('cam_auto',True),layout       # facecam search is on unless switched off
    if not cached:
     uploader=str((info.get('channel') or info.get('uploader') or '')) if url else ''
@@ -488,9 +504,10 @@ def start_make(b, previous=None):
     if language!='hi':
      from translit import roman_text
      c['hook']=roman_text(c.get('hook',''));c['title']=glossary.fix_text(roman_text(glossary.fix_text(c.get('title',''))))
+     c['highlight_words']=[roman_text(w) for w in c.get('highlight_words') or []];c['description']=roman_text(c.get('description',''))
      if c.get('words') and any(DEVA_RX.search(str(w.get('text',''))) for w in c['words']):lang='hinglish'     # YouTube gave Hindi script although another language was picked
     body={'id':sid2,'start':start,'end':end,'layout':layout_use,'top':(top_h if isinstance(top_h,(int,float)) and .2<=top_h<=.5 else .32),'captions':True,'caption_style':style,'language':language,'hook':(' '.join(to_hinglish(w) for w in c.get('hook','').split()) if lang=='hinglish' else c.get('hook','')),
-          'aspect':b.get('aspect','vertical'),'resolution':b.get('resolution',1080),'fps':b.get('fps',0),'title':c.get('title',''),'post_caption':c.get('title',''),'batch_id':job,'source_url':url,'cam':cam_use,'game':game_use,'features':c.get('features'),'weights_used':W,'moment_profile':profile,'focus_brief':focus_brief,'focus_match':c.get('focus_match'),'visual_review':c.get('visual_review')}
+          'aspect':b.get('aspect','vertical'),'resolution':b.get('resolution',1080),'fps':b.get('fps',0),'title':c.get('title',''),'post_caption':post_text(c),'punch_words':c.get('highlight_words') or [],'hashtags':c.get('hashtags') or [],'description':c.get('description',''),'batch_id':job,'source_url':url,'cam':cam_use,'game':game_use,'features':c.get('features'),'weights_used':W,'moment_profile':profile,'focus_brief':focus_brief,'focus_match':c.get('focus_match'),'visual_review':c.get('visual_review')}
     for k in styling.KEYS+brands.KEYS+hooks.KEYS:
      if b.get(k) not in (None,''):body[k]=b[k]
     if b.get('credit_auto') and uploader and not body.get('credit'):body['credit']='Clip: '+uploader[:40]
@@ -506,6 +523,11 @@ def start_make(b, previous=None):
      body['words']=ws
      save(job,{'caption_source':'YouTube captions' if url else 'Saved full-source transcript'})
     body['words']=subtitles.clean_words(body.get('words'),end-start)
+    if (b.get('ai_caption_fix') is True or (mode=='deep' and b.get('ai_caption_fix') is not False)) and language!='hi' and body['words'] and not any(DEVA_RX.search(str(w.get('text',''))) for w in body['words']):
+     import capfix      # 1A: AI fixes spelling, numbers, names and punctuation word by word (timings kept); skipped when no AI model is set up
+     save(job,{'stage':f'Fixing caption spelling {i+1}/{len(found)}'})
+     body['words'],changed=capfix.fix(body['words'],c.get('title') or title)
+     if changed:c['caption_fixes']=changed
     render_ids=checkpoint.setdefault('render_ids',{})
     ej=render_ids.get(str(i))
     if not ej:
@@ -519,7 +541,7 @@ def start_make(b, previous=None):
      ej=start_export(body,ej)['job']
      while state.get(ej,{}).get('status')=='running':time.sleep(.7)
      r=state[ej]
-    done.append({'parts':c.get('parts') or {},'viral':min(99,c['score']),'axes':axes(c.get('features') or {}),'file':ej,'start':c['start'],'end':c['end'],'title':c.get('title') or 'Clip %d'%(i+1),'hook':c.get('hook',''),'score':c['score'],'reason':c.get('reason',''),
+    done.append({'caption_fixes':c.get('caption_fixes',0),'hashtags':c.get('hashtags') or [],'description':c.get('description',''),'punch_words':c.get('highlight_words') or [],'parts':c.get('parts') or {},'viral':min(99,c['score']),'axes':axes(c.get('features') or {}),'file':ej,'start':c['start'],'end':c['end'],'title':c.get('title') or 'Clip %d'%(i+1),'hook':c.get('hook',''),'score':c['score'],'reason':c.get('reason',''),
                  'error':r.get('error'),'srt':r.get('srt'),'visual_review':c.get('visual_review')})
     if r.get('status')=='done':
      completed[str(i)]=done[-1]

@@ -1,7 +1,7 @@
 """Independent word-timed ASR, editable transcript and styled ASS/SRT."""
 from pathlib import Path
 from translit import to_hinglish
-import json,os,threading,subprocess
+import json,os,re,threading,subprocess
 MODELS={}
 ROMAN_PROMPT='Aaj hum GTA 6 ke baare mein baat karenge, yeh bahut mast hai. Kya haal hai bhai, chalo shuru karte hain. Matlab ekdum sahi hai, nahi yaar, bilkul.'
 DEVA_PROMPT='यह हिंदी और अंग्रेज़ी में गेमिंग वीडियो है। GTA, गेमप्ले, क्लिपिंग, वीडियो, टूल।'
@@ -214,6 +214,10 @@ def write(words,style,folder,name,hook='',position=1450,hook_y=300,width=1080,he
     flags=STYLE_FLAGS.get(style,{})
     if flags.get('anim') and anim=='highlight':anim=flags['anim']
     font_size=custom.get('caption_size',STYLES.get(style,('','','',58,0))[3])
+    # 1G: punch words chosen by the AI stay in the highlight colour all the time, not only while spoken
+    punch={re.sub(r'[^\wऀ-ॿ]','',str(p).lower()) for p in ((appearance or {}).get('punch_words') or [])[:8] if str(p).strip()}
+    punch.discard('')
+    is_punch=lambda text:re.sub(r'[^\wऀ-ॿ]','',str(text).lower()) in punch
     srt=[];groups=group_words(words,max_words=flags.get('max_words') or custom.get('caption_max_words',4),max_chars=int((width-100*width/1080)/(font_size*scale*0.62)))
     for i,group in enumerate(groups):
         if not group:continue
@@ -229,7 +233,7 @@ def write(words,style,folder,name,hook='',position=1450,hook_y=300,width=1080,he
         ev_style=flags.get('style','Main');at=flags.get('active_tags','');rt=flags.get('rest_tags','')
         pos=BS+'pos('+str(width//2)+','+str(position)+')'+BS+'fs'+str(size)+extra
         if anim=='full_line' or (style=='clean' and anim=='highlight' and 'caption_active' not in custom):
-            text='{'+pos+BS+'c'+rest+BS+'fad(90,0)}'+' '.join(cs(safe(w['text'])) for w in group)
+            text='{'+pos+BS+'c'+rest+BS+'fad(90,0)}'+' '.join(('{'+BS+'c'+active+'}'+cs(safe(w['text']))+'{'+BS+'c'+rest+'}') if is_punch(w['text']) else cs(safe(w['text'])) for w in group)
             ass.append(f'Dialogue: 1,{stamp(begin,True)},{stamp(end,True)},{ev_style},,0,0,0,,{text}')
             continue
         for n,word in enumerate(group):
@@ -245,7 +249,7 @@ def write(words,style,folder,name,hook='',position=1450,hook_y=300,width=1080,he
                 if newest and (pop or anim in ('pop_in','one_by_one')):
                     pp=str(pop or 118)
                     chunks.append('{'+BS+'c'+active+at+BS+'fscx100'+BS+'fscy100'+BS+'t(0,110,'+BS+'fscx'+pp+BS+'fscy'+pp+')'+BS+'t(110,230,'+BS+'fscx100'+BS+'fscy100)}'+t+'{'+BS+'fscx100'+BS+'fscy100}')
-                else:chunks.append('{'+BS+'c'+((active+at) if newest else (rest+rt))+'}'+t)
+                else:chunks.append('{'+BS+'c'+((active+at) if (newest or is_punch(group[k]['text'])) else (rest+rt))+'}'+t)
             lead=(BS+'fscx82'+BS+'fscy82'+BS+'t(0,140,'+BS+'fscx100'+BS+'fscy100)'+BS+'fad(80,0)') if (anim=='pop_in_line' and n==0) else ''
             text='{'+pos+lead+'}'+' '.join(chunks)
             ass.append(f'Dialogue: 1,{stamp(a,True)},{stamp(b,True)},{ev_style},,0,0,0,,{text}')

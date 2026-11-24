@@ -116,7 +116,7 @@ def roman_text(text):
     return ' '.join(ascii_fold(to_hinglish(part)).strip() if DEVA.search(part) else part for part in text.split())
 
 def to_hinglish(token):
-    """Convert one word token; Latin tokens and punctuation pass through. Keeps leading/trailing punctuation.
+    r"""Convert one word token; Latin tokens and punctuation pass through. Keeps leading/trailing punctuation.
     (Not \W: Devanagari vowel signs are marks, which Python's \w does not count as word characters.)"""
     if not DEVA.search(token): return token
     a, b = 0, len(token)
