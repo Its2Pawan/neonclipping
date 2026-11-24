@@ -362,7 +362,10 @@ def start_make(b, previous=None):
     info={'uploader':src_info['uploader']}
    elif url:
     save(job,{'stage':'Reading video info','progress':.01})
-    with _yt({'skip_download':True}) as y:info=y.extract_info(url,download=False)
+    import prefetch      # Get preview may already have fetched the info and YouTube captions while settings were chosen
+    info,ready_words=prefetch.get(url)
+    if not info:
+     with _yt({'skip_download':True}) as y:info=y.extract_info(url,download=False)
     if info.get('is_live') or info.get('live_status') in ('is_live','is_upcoming'):
      raise RuntimeError('This stream is live right now. Use the Live clipping panel to clip it while it is on, or wait until it ends and use Make clips on the finished video.')
     video_lang=str(info.get('language') or '')
@@ -370,7 +373,7 @@ def start_make(b, previous=None):
     title=info.get('title') or ''
     try:
      from captions_yt import from_info
-     yt_words=from_info(info);save(job,{'transcript_source':'YouTube captions' if yt_words else 'speech model'})
+     yt_words=ready_words or from_info(info);save(job,{'transcript_source':'YouTube captions' if yt_words else 'speech model'})
     except Exception:yt_words=None
     import replay;heat=replay.from_info(info) if flags['most_replayed'] else None
     if flags['chat_replay'] and ('live_chat' in (info.get('subtitles') or {}) or 'twitch' in str(info.get('extractor','')).lower()):

@@ -187,6 +187,10 @@ def attach(app,DATA,state,probe):
         if not url:raise HTTPException(400,'Paste a video link.')
         try:window=parse_range(body)
         except ValueError as error:raise HTTPException(400,str(error))
+        try:      # get ready for Make clips (info + YouTube captions) while settings are chosen; no clips are made here
+            import prefetch, ytdl
+            prefetch.start(url,lambda o:ytdl.YDL({'noplaylist':True,'quiet':True,'no_warnings':True,'socket_timeout':20,**o}))
+        except Exception:pass
         job=uuid.uuid4().hex;save(job,{'status':'running','stage':'Import starting','message':'Getting preview frames; download runs in background','preview_status':'loading','url':url,'source_offset':window[0] if window else 0})
         def preview_work():
             try:prepare(url,job,DATA,probe,lambda fields:save(job,fields))
