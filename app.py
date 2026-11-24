@@ -73,7 +73,7 @@ def cover_image(id:str):
  return FileResponse(path,media_type='image/jpeg')
 @app.get('/assets/{name}')
 def assets(name:str):
- if name not in ('app.js','style.css','extras.js','transcripts.js','vision.js','report.js','studio.js','composer.js','composer.css','sidebar.js','library.js','right-bar.js','right-bar.css','editor.js','editor.css','capdraw.js'):raise HTTPException(404)
+ if name not in ('app.js','style.css','extras.js','transcripts.js','vision.js','report.js','studio.js','composer.js','composer.css','sidebar.js','library.js','right-bar.js','right-bar.css','editor.js','editor.css','capdraw.js','modes.js','modes.css'):raise HTTPException(404)
  return FileResponse(ROOT/name)
 @app.get('/text/{id}/{kind}')
 def text_file(id:str,kind:str):
@@ -274,7 +274,9 @@ def start_make(b, previous=None):
  if moments is not None:
   if not isinstance(moments,list) or not 1<=len(moments)<=40 or not all(isinstance(m,dict) for m in moments):raise HTTPException(400,'Moments must be a list of 1 to 40 items with start and end.')
   count=min(24,len(moments))
- mode='deep' if b.get('mode')=='deep' else 'fast'
+ import modes
+ flags=modes.resolve(b.get('mode'),b.get('features'))      # Fast / Balanced / Best + the 'What runs' tiles
+ mode='deep' if flags['deep_scan'] else 'fast'
  src_h=source_height(b.get('source_height'))     # how sharp the downloaded source is: 1080p by default, 4K or 720p on request
  profile=b.get('moment_profile','balanced')
  if profile not in curation.PROFILES:raise HTTPException(400,'Choose Balanced, Action or Dialogue moments.')
@@ -301,7 +303,7 @@ def start_make(b, previous=None):
    def detect_game():
     try:up=(info.get('channel') or info.get('uploader') or '') if url else ''
     except NameError:up=''
-    return games.detect(b.get('game_name') if isinstance(b.get('game_name'),str) else '',title,up,'' if url else getattr(src0,'name',''))
+    return games.detect(b.get('game_name') if isinstance(b.get('game_name'),str) else '',title,up,'' if url else getattr(src0,'name','')) if flags['game_aware'] else (None,[])
    fast=False;title='';yt_words=None;video_lang='';heat=None;chat_sig=None;chat_ready=lambda:None
    cached=previous and previous.get('plan')
    completed=previous.get('completed',{}) if cached else {}
@@ -326,8 +328,8 @@ def start_make(b, previous=None):
      from captions_yt import from_info
      yt_words=from_info(info);save(job,{'transcript_source':'YouTube captions' if yt_words else 'speech model'})
     except Exception:yt_words=None
-    import replay;heat=replay.from_info(info)
-    if b.get('chat_replay',True) is not False and ('live_chat' in (info.get('subtitles') or {}) or 'twitch' in str(info.get('extractor','')).lower()):
+    import replay;heat=replay.from_info(info) if flags['most_replayed'] else None
+    if flags['chat_replay'] and ('live_chat' in (info.get('subtitles') or {}) or 'twitch' in str(info.get('extractor','')).lower()):
      import chat_replay      # 3C: the finished stream's chat (text only), read in the background while the audio downloads
      chat_box={}
      def read_chat(info=info):
@@ -434,7 +436,7 @@ def start_make(b, previous=None):
       if beat['live'] and time.monotonic()-beat['seen']>=4:save(job,{'stage':f'Finding moments in audio · working {int(time.monotonic()-t0)}s (long videos take a few minutes)'})
     threading.Thread(target=heartbeat,daemon=True).start()
     game_name,game_tags=detect_game();chat_sig=chat_ready()
-    try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig)
+    try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig,whole=flags['whole_pass'] or b.get('whole_pass') is True,rerank_on=flags['rerank'],fair=flags['fair_order'])
     finally:beat['live']=False
     found=choose(found,lambda c:lowres_section(url,c))
     if not found:
@@ -447,7 +449,7 @@ def start_make(b, previous=None):
     else:sid,p=src0.stem,src0
     meta=probe(p);duration=meta['duration'];save(job,{'source_id':sid,'meta':meta,'stage':'Finding moments','progress':.1})
     game_name,game_tags=detect_game();chat_sig=chat_ready()
-    found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig)
+    found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig,whole=flags['whole_pass'] or b.get('whole_pass') is True,rerank_on=flags['rerank'],fair=flags['fair_order'])
     found=choose(found,lambda c:(p,c['start']))
     if not found:
      checkpoint_path.unlink(missing_ok=True)
@@ -500,7 +502,7 @@ def start_make(b, previous=None):
     if sections:
      sid2=sections[i].result();real=section_start(p,DATA/(sid2+'.mp4'),max(0,c['start']-PAD));start=max(0,c['start']-real);end=min(_dur(DATA/(sid2+'.mp4')),start+c['end']-c['start']);words=c.get('words')
     else:sid2=sid;start=c['start'];end=c['end'];words=c.get('words')
-    if b.get('skip_frozen',True) is not False:      # 1E: ad break, BRB slate or frozen screen: not worth a clip
+    if flags['skip_frozen']:      # 1E: ad break, BRB slate or frozen screen: not worth a clip
      import frozen
      still,share=frozen.is_frozen(DATA/(sid2+'.mp4'),start,end-start)
      if still:
@@ -542,7 +544,7 @@ def start_make(b, previous=None):
      body['words']=ws
      save(job,{'caption_source':'YouTube captions' if url else 'Saved full-source transcript'})
     body['words']=subtitles.clean_words(body.get('words'),end-start)
-    if (b.get('ai_caption_fix') is True or (mode=='deep' and b.get('ai_caption_fix') is not False)) and language!='hi' and body['words'] and not any(DEVA_RX.search(str(w.get('text',''))) for w in body['words']):
+    if (b.get('ai_caption_fix') is True or (flags['caption_fix'] and b.get('ai_caption_fix') is not False)) and language!='hi' and body['words'] and not any(DEVA_RX.search(str(w.get('text',''))) for w in body['words']):
      import capfix      # 1A: AI fixes spelling, numbers, names and punctuation word by word (timings kept); skipped when no AI model is set up
      save(job,{'stage':f'Fixing caption spelling {i+1}/{len(found)}'})
      body['words'],changed=capfix.fix(body['words'],c.get('title') or title)
@@ -808,6 +810,14 @@ def llm_test():
  import llm
  return llm.test()
 
+@app.post('/llm/models')
+def llm_models(body:dict):
+ """Find models: the provider's own model list (the key is used for this one request and not stored here)."""
+ import llm
+ try:return {'models':llm.list_models(body.get('base_url'),body.get('api_key'))}
+ except (ValueError,RuntimeError) as e:raise HTTPException(400,str(e))
+ except Exception as e:raise HTTPException(502,'Could not reach the provider: '+type(e).__name__)
+
 import assistant
 assistant.attach(app)
 import storage
@@ -868,6 +878,7 @@ subtitles.attach(app)
 aiparts.attach(app)
 facecam_detect.attach(app,DATA)
 brands.attach(app,DATA)
+import modes as _modes;_modes.attach(app)
 glossary.attach(app,DATA)
 hooks.attach(app)
 import transcripts

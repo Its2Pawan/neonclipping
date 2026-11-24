@@ -189,7 +189,7 @@ def snap(c,words,min_len,max_len,ext=None,source_end=None):
     duration=c['end']-c['start']
     words[:]=[dict(word,end=min(word['end'],duration)) for word in pool if 0<=word['start']<duration and word['end']>word['start']]
 
-def find(src,duration,count,length,report,language=None,data=None,min_len=None,motion=True,words=None,deep=False,weights=None,select=True,profile='balanced',brief='',includes=(),excludes=(),game=None,heat=None,chat=None,whole=False):
+def find(src,duration,count,length,report,language=None,data=None,min_len=None,motion=True,words=None,deep=False,weights=None,select=True,profile='balanced',brief='',includes=(),excludes=(),game=None,heat=None,chat=None,whole=False,rerank_on=True,fair=None):
     """Return up to `count` clips, best first. Always returns `count` when the source is long enough."""
     pool=(count*4+2) if deep else (count*2+1 if count<6 else count+4)
     if not words:pool=count+2 if not deep else min(pool,count*2+2)      # no free transcript: every candidate costs a speech-model pass, so read fewer
@@ -220,7 +220,7 @@ def find(src,duration,count,length,report,language=None,data=None,min_len=None,m
     # because a small local model needs ~45-75 s per 5 minutes of talk (measured 24 Nov, llama3.2:3b) and gemma4:e2b crashed Ollama 0.32.6
     # on these longer prompts (llama-server 0xc0000409), so the plain local model is used for this pass.
     wp_model=llm.model_name() or (_model(False) if duration<=1800 else None)
-    if (deep or whole) and words and wp_model:
+    if whole and words and wp_model:
         import wholepass, games
         loud=np.maximum(sigs['loud'],sigs.get('bang',sigs['loud'])) if 'loud' in sigs else None
         picks=wholepass.proposals(wp_model,words,duration,min_len or length*.5,length,count,loud,chat['heat'] if chat else None,games.rules(game),lambda f,m:report(.3,m))
@@ -262,9 +262,9 @@ def find(src,duration,count,length,report,language=None,data=None,min_len=None,m
             if c.get('chat_kind'):c['reason']=(c.get('reason') or '')+' · chat: '+c['chat_kind']
         c['rank']=curation.focus_rank(learn.score(c['features'],weights),c.get('focus_match'))+intent.boost(c,direction)
         c['score']=min(99,round(c['rank']*100))
-    if model:      # 2D re-rank (all modes, one call); 4C reversed second reading in Deep
+    if model and rerank_on:      # 2D re-rank (one call); 4C reversed second reading in Best ('fair' tile)
         report(.96,'Comparing the best moments side by side')
-        if rerank(clips,model,count,2 if deep else 1):engine+=' + head-to-head'
+        if rerank(clips,model,count,2 if (deep if fair is None else fair) else 1):engine+=' + head-to-head'
     clips=sorted(clips,key=lambda c:-c['rank'])
     if select:clips=curation.select(clips,count,profile)
     return clips,engine

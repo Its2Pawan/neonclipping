@@ -16,12 +16,38 @@ OLLAMA = 'http://127.0.0.1:11434'
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('NEONCLIPPING_DATA_DIR', str(ROOT / 'data')))
 PRESETS = {
-    'groq': {'label': 'Groq (fast, free tier)', 'base_url': 'https://api.groq.com/openai/v1', 'model': 'llama-3.3-70b-versatile'},
-    'openrouter': {'label': 'OpenRouter', 'base_url': 'https://openrouter.ai/api/v1', 'model': 'meta-llama/llama-3.3-70b-instruct'},
-    'gemini': {'label': 'Google Gemini', 'base_url': 'https://generativelanguage.googleapis.com/v1beta/openai', 'model': 'gemini-2.5-flash'},
-    'openai': {'label': 'OpenAI', 'base_url': 'https://api.openai.com/v1', 'model': 'gpt-4o-mini'},
-    'lmstudio': {'label': 'LM Studio on this PC', 'base_url': 'http://127.0.0.1:1234/v1', 'model': ''},
+    'groq': {'label': 'Groq (fast, free tier)', 'base_url': 'https://api.groq.com/openai/v1', 'model': 'llama-3.3-70b-versatile',
+             'key_url': 'https://console.groq.com/keys', 'free': 'Free tier with daily limits per model, no card needed. Very fast.'},
+    'gemini': {'label': 'Google Gemini', 'base_url': 'https://generativelanguage.googleapis.com/v1beta/openai', 'model': 'gemini-2.5-flash',
+               'key_url': 'https://aistudio.google.com/apikey', 'free': 'Free tier in Google AI Studio with daily limits (they change often; AI Studio shows yours).'},
+    'nvidia': {'label': 'NVIDIA (build.nvidia.com)', 'base_url': 'https://integrate.api.nvidia.com/v1', 'model': 'meta/llama-3.3-70b-instruct',
+               'key_url': 'https://build.nvidia.com/settings/api-keys', 'free': 'Free trial credits after you verify the account (about 1,000 to start, reported 40 requests a minute).'},
+    'xai': {'label': 'xAI Grok', 'base_url': 'https://api.x.ai/v1', 'model': '',
+            'key_url': 'https://console.x.ai', 'free': 'New accounts have received free trial credits; the console shows the current offer. Press Find models.'},
+    'openrouter': {'label': 'OpenRouter', 'base_url': 'https://openrouter.ai/api/v1', 'model': 'meta-llama/llama-3.3-70b-instruct',
+                   'key_url': 'https://openrouter.ai/keys', 'free': 'Many models, one key; some models are free with limits.'},
+    'openai': {'label': 'OpenAI', 'base_url': 'https://api.openai.com/v1', 'model': 'gpt-4o-mini', 'key_url': 'https://platform.openai.com/api-keys', 'free': 'Paid.'},
+    'lmstudio': {'label': 'LM Studio on this PC', 'base_url': 'http://127.0.0.1:1234/v1', 'model': '', 'key_url': 'https://lmstudio.ai', 'free': 'Free, runs on this PC.'},
 }
+
+
+def list_models(base_url=None, api_key=None):
+    """Model ids the provider offers (GET /models), for the 'Find models' button. Uses the saved key when none is given."""
+    saved = _read()
+    base = valid_base_url(base_url or saved.get('base_url'))
+    key = str(api_key or saved.get('api_key') or '').strip()
+    headers = {'User-Agent': 'NeonClipping'}
+    if key:
+        headers['Authorization'] = 'Bearer ' + key
+    try:
+        with urllib.request.urlopen(urllib.request.Request(base + '/models', headers=headers), timeout=20) as r:
+            data = json.loads(r.read(4_000_000).decode('utf-8', 'replace'))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f'The provider answered HTTP {e.code}: check the key.') from None
+    rows = data.get('data') if isinstance(data, dict) else data
+    ids = sorted({str(m.get('id')) for m in rows or [] if isinstance(m, dict) and m.get('id')})
+    text = [i for i in ids if not re.search(r'embed|whisper|tts|image|vision-only|guard|rerank|audio|moderation|dall|sora', i, re.I)]
+    return text[:300]
 
 
 def _path():
