@@ -57,3 +57,9 @@ html body .import-note.quiet{display:none!important}
 /* viral score card: number, ready badge and the 4 parts (restored 24 Nov) */
 html body .viral .vr{font-size:10.5px;font-weight:700;padding:1px 8px;border-radius:99px;margin-left:6px}html body .viral .vr.ok{background:#9cff5722;color:#9cff57}html body .viral .vr.rv{background:#ffd45a22;color:#ffd45a}
 .vparts{display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;margin-top:5px;width:100%}.vp{display:grid;grid-template-columns:64px 1fr 18px;align-items:center;gap:5px;font-size:10px;color:#b9a9cc}.vp i{font-style:normal}.vp em{display:block;height:5px;border-radius:9px;background:linear-gradient(90deg,#ff3d6e,#25f4ee)}.vp small{text-align:right;color:#f6edfc}
+
+/* Settings > Automation */
+.au-card{display:flex;flex-direction:column;gap:6px;padding:10px 12px;margin:8px 0;border:1px solid #2b2140;border-radius:12px;background:#0d0a15}
+.au-card small{color:#a998bb;line-height:1.4}.au-card input:not([type=checkbox]),.au-card textarea,.au-card select{background:#0a0711;border:1px solid #2b2140;border-radius:10px;color:inherit;padding:8px 10px;width:100%}
+.au-sw{display:flex;align-items:center;gap:8px;cursor:pointer}.au-sw input{width:auto}
+.vflag{display:inline-block;margin:4px 0 0;padding:2px 9px;border-radius:99px;background:#ff3d6e22;color:#ff7a9c;font-size:11px;font-weight:700}

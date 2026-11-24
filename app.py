@@ -391,7 +391,8 @@ def start_make(b, previous=None):
       if rows:save(job,{'chat_messages':len(rows)})
      chat_thread=threading.Thread(target=read_chat,daemon=True);chat_thread.start()
      def chat_ready():
-      chat_thread.join(timeout=600);return chat_box.get('sig')
+      save(job,{'stage':'Reading the stream chat (Fast waits up to 20 s)'})
+      chat_thread.join(timeout=600 if b.get('mode') in ('balanced','deep') else 20);return chat_box.get('sig')      # Fast never waits long for a big chat download
     else:chat_ready=lambda:None
     checkpoint['source_info']={'heatmap':heat,'fast':fast,'language':video_lang,'title':title,'words':yt_words,'uploader':info.get('channel') or info.get('uploader') or ''}
     persist()
@@ -519,6 +520,7 @@ def start_make(b, previous=None):
       smart.review_finalists(found,reviewer)
    if game_name:save(job,{'game':game_name})
    dropped_frozen=[]
+   used_titles_=set()
    done=[];cam_use,game_use,cam_checked,layout_use=cam,game,not b.get('cam_auto',True),layout       # facecam search is on unless switched off
    if not cached:
     uploader=str((info.get('channel') or info.get('uploader') or '')) if url else ''
@@ -607,6 +609,9 @@ def start_make(b, previous=None):
        c['reason']=c.get('reason','')+' · visible '+reaction
        c['score']=min(99,c['score']+4)
      except Exception:pass
+    ttl_=str(c.get('title') or '').strip().casefold()      # small models give every clip the same title: use the clip's own words instead
+    if not ttl_ or ttl_ in used_titles_:c['title']=(' '.join(str(c.get('hook') or c.get('transcript') or '').replace('?!','').split()[:7]).strip() or 'Clip %d'%(i+1))
+    used_titles_.add(str(c.get('title')).strip().casefold())
     lang=language or ('hinglish' if (video_lang.startswith('hi') or c.get('language')=='hi') else None)
     if language!='hi':
      from translit import roman_text
@@ -659,11 +664,14 @@ def start_make(b, previous=None):
      ej=start_export(body,ej)['job']
      while state.get(ej,{}).get('status')=='running':time.sleep(.7)
      r=state[ej]
-    done.append({'caption_fixes':c.get('caption_fixes',0),'hashtags':c.get('hashtags') or [],'description':c.get('description',''),'punch_words':c.get('highlight_words') or [],'parts':c.get('parts') or {},'viral':min(99,c['score']),'axes':axes(c.get('features') or {}),'file':ej,'start':c['start'],'end':c['end'],'title':c.get('title') or 'Clip %d'%(i+1),'hook':c.get('hook',''),'score':c['score'],'reason':c.get('reason',''),'review_reason':c.get('review_reason',''),
+    import automation      # 5H: words-to-avoid check and webhook
+    flags_=automation.check_clip([c.get('title'),c.get('hook'),c.get('description'),' '.join(str(w.get('text','')) for w in (body.get('words') or []))])
+    done.append({'flags':flags_,'caption_fixes':c.get('caption_fixes',0),'hashtags':c.get('hashtags') or [],'description':c.get('description',''),'punch_words':c.get('highlight_words') or [],'parts':c.get('parts') or {},'viral':min(99,c['score']),'axes':axes(c.get('features') or {}),'file':ej,'start':c['start'],'end':c['end'],'title':c.get('title') or 'Clip %d'%(i+1),'hook':c.get('hook',''),'score':c['score'],'reason':c.get('reason',''),'review_reason':c.get('review_reason',''),
                  'error':r.get('error'),'srt':r.get('srt'),'visual_review':c.get('visual_review')})
     if r.get('status')=='done':
      completed[str(i)]=done[-1]
      persist()
+     automation.notify(DATA,done[-1])
     save(job,{'clips':list(done),'stage':f'Rendered {i+1}/{len(found)}','progress':.6+.4*(i+1)/len(found)})
    if any(item.get('error') for item in done):
     raise RuntimeError('Some clips failed. Resume this batch to retry the missing clips.')
@@ -1002,6 +1010,7 @@ facecam_detect.attach(app,DATA)
 brands.attach(app,DATA)
 import modes as _modes;_modes.attach(app)
 import shortcut;shortcut.attach(app)
+import automation as _automation;_automation.attach(app,DATA,probe)
 import campaigns;campaigns.attach(app,DATA)
 import youtube_feed;youtube_feed.attach(app,DATA)
 glossary.attach(app,DATA)

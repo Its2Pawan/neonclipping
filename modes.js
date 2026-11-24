@@ -48,10 +48,34 @@
     let d = $('key-dialog');
     if (!d) { d = document.createElement('dialog'); d.id = 'key-dialog'; d.className = 'key-dialog'; document.body.append(d); }
     d.innerHTML = '<div class="kd-head"><b>⚙ Settings</b><button type="button" class="mt-link" data-kd="close">✕</button></div>' +
-      '<div class="st-tabs"><button type="button" data-st="key"' + (tab !== 'shortcut' ? ' class="on"' : '') + '>🔑 AI key (free)</button><button type="button" data-st="shortcut"' + (tab === 'shortcut' ? ' class="on"' : '') + '>📌 Shortcut</button></div><div id="st-body"></div>';
+      '<div class="st-tabs"><button type="button" data-st="key"' + (tab !== 'shortcut' ? ' class="on"' : '') + '>🔑 AI key (free)</button><button type="button" data-st="shortcut"' + (tab === 'shortcut' ? ' class="on"' : '') + '>📌 Shortcut</button><button type="button" data-st="auto"' + (tab === 'auto' ? ' class="on"' : '') + '>⚙ Automation</button></div><div id="st-body"></div>';
     if (!d.open) d.showModal();
-    if (tab === 'shortcut') shortcutPane(); else keyDialog();
+    if (tab === 'shortcut') shortcutPane(); else if (tab === 'auto') autoPane(); else keyDialog();
   }
+  // ---------- Automation: watch folder, webhook, words to avoid
+  async function autoPane() {
+    const b = $('st-body'); b.innerHTML = 'Loading…'; let s = {};
+    try { s = await request('/automation'); } catch (e) { b.textContent = e.message; return; }
+    b.innerHTML = '<div class="au-card"><label class="au-sw"><input type="checkbox" id="au-on"' + (s.watch_on ? ' checked' : '') + '><b>📂 Watch a folder</b></label>' +
+      '<small>Drop a finished recording into this folder and clips are made by themselves, even overnight. Status: <b id="au-status">' + esc(s.status || 'off') + '</b>' + (s.last ? ' · last: ' + esc(s.last) : '') + '</small>' +
+      '<input id="au-folder" placeholder="Full folder path, e.g. D:\Recordings" value="' + esc(s.watch_folder || '') + '">' +
+      '<div class="kd-row"><label>Clips per video <input id="au-count" type="number" min="1" max="12" value="' + (s.watch_count || 4) + '" style="width:70px"></label>' +
+      '<label>Mode <select id="au-mode"><option value="fast"' + (s.watch_mode === 'fast' ? ' selected' : '') + '>Fast</option><option value="balanced"' + (s.watch_mode === 'balanced' ? ' selected' : '') + '>Balanced</option><option value="deep"' + (s.watch_mode === 'deep' ? ' selected' : '') + '>Best</option></select></label></div></div>' +
+      '<div class="au-card"><b>🔔 Tell me when a clip is ready</b><small>A web address (Discord webhook, Zapier, your own script). It gets only the title, hook, score and hashtags; the video is never sent.</small>' +
+      '<input id="au-hook" placeholder="https://… (leave empty for none)" value="' + esc(s.webhook_url || '') + '"></div>' +
+      '<div class="au-card"><b>🚫 Words to avoid</b><small>A clip whose title, hook, description or captions contain one of these gets a red "Check before posting" tag.</small>' +
+      '<textarea id="au-banned" rows="3" placeholder="one word per line or separated by commas">' + esc((s.banned || []).join(', ')) + '</textarea></div>' +
+      '<div class="kd-row"><button type="button" class="primary" data-au="save">Save</button><span class="muted" id="au-note"></span></div>';
+  }
+  async function autoSave() {
+    const note = t => { const n = $('au-note'); if (n) n.textContent = t; };
+    note('Saving…');
+    try {
+      const s = await request('/automation', { watch_folder: $('au-folder').value.trim(), watch_on: $('au-on').checked, watch_count: Number($('au-count').value) || 4, watch_mode: $('au-mode').value, webhook_url: $('au-hook').value.trim(), banned: $('au-banned').value });
+      note('✓ Saved' + (s.watch_on ? ' · watching ' + s.watch_folder : ''));
+    } catch (e) { note('✗ ' + e.message); }
+  }
+
   function shortcutPane() {
     $('st-body').innerHTML = '<p class="muted">Come back to NeonClipping in one click. The shortcut opens it if it is running and starts it if not.</p>' +
       '<div class="kd-grid"><button type="button" class="kd-p" data-sc="desk"><b>🖥 Desktop + Start Menu</b><small>An icon on your Desktop and in the Start Menu (Windows), or on the Desktop (Mac / Linux).</small></button>' +
@@ -117,9 +141,10 @@
     const b = e.target.closest('[data-mode]'); if (b && $('mode')) { $('mode').value = b.dataset.mode; $('mode').dispatchEvent(new Event('change', { bubbles: true })); draw(); return; }
     if (e.target.closest('#mt-what')) { panelOpen = !panelOpen; draw(); return; }
     if (e.target.closest('#mt-reset')) { own = {}; saveOwn(); draw(); return; }
+    if (e.target.closest('[data-au="save"]')) { autoSave(); return; }
     if (e.target.closest('[data-sc]')) { shortcutAction(e.target.closest('[data-sc]').dataset.sc); return; }
     const f = e.target.closest('[data-feat]'); if (f && cat) { const feat = cat.features.find(x => x.key === f.dataset.feat); const def = feat.modes.includes(mode()); const next = !isOn(feat); if (next === def) delete own[feat.key]; else own[feat.key] = next; saveOwn(); draw(); return; }
-    const stt = e.target.closest('[data-st]'); if (stt) { document.querySelectorAll('.st-tabs button').forEach(x => x.classList.toggle('on', x === stt)); if (stt.dataset.st === 'shortcut') shortcutPane(); else keyDialog(); return; }
+    const stt = e.target.closest('[data-st]'); if (stt) { document.querySelectorAll('.st-tabs button').forEach(x => x.classList.toggle('on', x === stt)); if (stt.dataset.st === 'shortcut') shortcutPane(); else if (stt.dataset.st === 'auto') autoPane(); else keyDialog(); return; }
     const pv = e.target.closest('[data-prov]'); if (pv) { document.querySelectorAll('.kd-p').forEach(x => x.classList.toggle('on', x === pv)); keySteps(pv.dataset.prov); return; }
     const mm = e.target.closest('[data-model]'); if (mm) { $('kd-model').value = mm.dataset.model; return; }
     const ka = e.target.closest('[data-kd]'); if (ka) keyAction(ka.dataset.kd);

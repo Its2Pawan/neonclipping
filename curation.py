@@ -54,9 +54,7 @@ def extract_hook(text):
         start=max(0,min(center-2,len(tokens)-9))
         tokens=tokens[start:start+9]
     hook=' '.join(tokens)
-    if len(tokens)<=6 and not hook.endswith(('?','!')):
-        hook=('Wait for it: ','This is the part: ','Listen to this: ')[sum(map(ord,hook))%3]+hook
-    return hook[:80]
+    return hook.rstrip(',;:')[:80]      # a real quote from the clip; no made-up lead-in
 
 def hook_supported(hook,text):
     if len(hook.split())<4:return False

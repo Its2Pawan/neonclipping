@@ -1,6 +1,9 @@
 # Changelog
 
 ## 2026-11-24
+- **Fast mode on very long videos:** reading a finished stream's chat no longer holds everything up (Fast waits at most 20 s for it; Balanced and Best wait longer). A 3.4 hour stream gave 3 clips in 4.3 minutes (before, the chat download alone could run 10+ minutes).
+- **Titles and hooks:** clips no longer all get the same title, and a hook that has to be taken from the transcript is the real quote, without a made-up lead-in.
+- **Automation (Settings, new tab):** a **watch folder** (drop a finished recording in it and clips are made by themselves, even overnight), a **webhook** that announces each finished clip (title, hook, score, hashtags; never the video), and **words to avoid**: a clip whose title, hook, description or captions contain one gets a red 'Check before posting' tag.
 - **Viral score is back on every card**, with the four parts (Hook, Engagement, Value, Share) as small bars and a Ready to post / Review first badge, also in My clips (old clips get it rebuilt from their saved signals).
 - **Fast mode is quicker again:** it reads moments with the lighter local model (llama3.2) and skips a second AI call for the opening heading when the first one already has a quote behind it; the bigger model is used in Balanced and Best. A 1h43m video gave 2 clips in about 2 minutes (was 3.5).
 - **Editor effects:** mute or bleep selected transcript words, add a facecam bar or blur during censored words, and add a playback progress strip to the export.
