@@ -1,6 +1,6 @@
 (function () {
   const filters = [
-    ['all', 'All platforms'], ['india', 'India payout'], ['GTA', 'GTA'],
+    ['all', 'All platforms'], ['GTA', 'GTA'],
     ['Streams', 'Streams'], ['gaming', 'Gaming'],
   ];
   const element = (tag, className, text) => {
@@ -165,7 +165,6 @@
     }
     const visible = platforms.filter(platform => {
       if (currentFilter === 'all') return true;
-      if (currentFilter === 'india') return platform.india;
       if (currentFilter === 'gaming') return platform.good_for.some(tag => tag === 'GTA' || tag === 'Streams');
       return platform.good_for.includes(currentFilter);
     });
