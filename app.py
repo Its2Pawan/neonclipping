@@ -879,6 +879,7 @@ aiparts.attach(app)
 facecam_detect.attach(app,DATA)
 brands.attach(app,DATA)
 import modes as _modes;_modes.attach(app)
+import shortcut;shortcut.attach(app)
 glossary.attach(app,DATA)
 hooks.attach(app)
 import transcripts

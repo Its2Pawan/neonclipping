@@ -34,3 +34,22 @@ html body .kd-p.on{border-color:#25f4ee!important;box-shadow:0 0 0 1px #25f4ee55
 .kd-list{display:flex;flex-wrap:wrap;gap:5px;max-height:120px;overflow:auto;font-size:12px;color:#a998bb}
 html body .kd-m{background:#140f20!important;border:1px solid #2b2140!important;color:#d8cbe8!important;border-radius:99px;padding:3px 9px;font-size:11px;cursor:pointer}
 @media(max-width:640px){.mt-row{grid-template-columns:1fr}}
+
+/* ---- calmer home screen (creator, 24 Nov: "cheezon ko cluttered mat rehne do") */
+html body main>header{padding:18px 24px 26px!important;margin-bottom:14px}
+html body main>header::before{height:22%!important;opacity:.55}
+html body main>header h1{font-size:34px!important;line-height:1.05;margin:4px 0 2px}
+html body main>header .top{align-items:center}
+html body main>header p{margin:4px 0 0;font-size:13px}
+html body .social a,html body .social button{font-size:11.5px!important;padding:5px 11px!important}
+html body .support-bar{margin-top:10px!important;padding:8px 12px!important;font-size:12px!important;gap:10px!important}
+html body .support-bar>span:first-child{flex:1 1 360px;min-width:0;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+html body .support-bar .don-big,html body .support-bar .star-big{padding:6px 12px!important;font-size:12px!important}
+html body .make-row{display:none!important}
+html body #frames:empty+label.toggle{display:none!important}
+.mt{padding:10px 12px!important}.mt small{font-size:11px}
+html body .mt-link.what{display:inline-flex;align-items:center;gap:6px}
+html body .mt-link.what.open{border-color:#25f4ee88!important;color:#fff!important}
+
+.st-tabs{display:flex;gap:6px;margin:6px 0 10px}html body .st-tabs button{background:#140f20!important;border:1px solid #2b2140!important;color:#d8cbe8!important;border-radius:99px;padding:6px 14px;cursor:pointer}html body .st-tabs button.on{border-color:#ff3d6e!important;color:#fff!important;background:#ff3d6e22!important}
+html body .import-note.quiet{display:none!important}

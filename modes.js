@@ -15,6 +15,9 @@
   const saveOwn = () => { try { localStorage.setItem('nc-features', JSON.stringify(own)); } catch (e) { } };
   const mode = () => (($('mode') || {}).value) || 'fast';
   const isOn = f => (f.key in own) ? own[f.key] : f.modes.includes(mode());
+  let panelOpen = false;          // closed by default: the home screen stays calm
+  const whatLabel = () => { const n = Object.keys(own).length, on = cat ? cat.features.filter(isOn).length : 0;
+    return '☰ What runs in ' + esc((MODE_INFO[mode()] || [, mode()])[1]) + ' <small>' + on + ' on</small>' + (n ? ' <i>' + n + ' changed</i>' : '') + ' <b>' + (panelOpen ? '▴' : '▾') + '</b>'; };
 
   function ensureBalancedOption() {
     const sel = $('mode'); if (!sel || [...sel.options].some(o => o.value === 'balanced')) return;
@@ -26,8 +29,9 @@
     const box = $('mode-tiles'); if (!box || !cat) return;
     const m = mode(), extra = Object.keys(own).length;
     box.innerHTML = '<div class="mt-row">' + cat.modes.map(x => { const [ic, name, line] = MODE_INFO[x.key] || ['', x.label, '']; return '<button type="button" class="mt' + (x.key === m ? ' on' : '') + '" data-mode="' + x.key + '"><span class="mt-ic">' + ic + '</span><b>' + esc(name) + '</b><small>' + esc(line) + '</small></button>'; }).join('') +
-      '</div><div class="mt-foot"><button type="button" class="mt-link" id="mt-what">☰ What runs' + (extra ? ' <i>' + extra + ' changed</i>' : '') + '</button><button type="button" class="mt-link key" id="mt-key">🔑 Put your API key <small>free, makes a slow PC fast</small></button></div>' +
-      '<div class="mt-panel" id="mt-panel" hidden></div>';
+      '</div><div class="mt-foot"><button type="button" class="mt-link what' + (panelOpen ? ' open' : '') + '" id="mt-what" aria-expanded="' + panelOpen + '">' + whatLabel() + '</button></div>' +
+      '<div class="mt-panel" id="mt-panel"' + (panelOpen ? '' : ' hidden') + '></div>';
+    if (panelOpen) drawPanel();
   }
 
   function drawPanel() {
@@ -37,14 +41,40 @@
       cat.features.map(f => { const on = isOn(f), [ln, lc] = LOAD[f.load] || ['', '']; return '<button type="button" class="mf' + (on ? ' on' : '') + (f.key in own ? ' own' : '') + '" data-feat="' + f.key + '" aria-pressed="' + on + '"><span class="mf-top"><b>' + esc(f.name) + '</b><span class="ld ' + lc + '">' + ln + '</span></span><small>' + esc(f.line) + '</small><span class="mf-sw">' + (on ? 'ON' : 'OFF') + '</span></button>'; }).join('') + '</div>';
   }
 
-  // ---------- API key window
-  function keyDialog() {
+  // ---------- Settings (left sidebar): AI key and Shortcut live here, not on the home screen
+  let installPrompt = null;
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; });
+  function settingsDialog(tab) {
     let d = $('key-dialog');
     if (!d) { d = document.createElement('dialog'); d.id = 'key-dialog'; d.className = 'key-dialog'; document.body.append(d); }
-    d.innerHTML = '<div class="kd-head"><b>Put your API key</b><button type="button" class="mt-link" data-kd="close">✕</button></div>' +
-      '<p class="muted">A free key lets an online AI do the thinking (picking moments, hooks, titles, spelling) so a slow PC still feels fast. Only the <b>text</b> of a clip is sent; your video and audio stay on this PC. You can switch it off any time.</p>' +
+    d.innerHTML = '<div class="kd-head"><b>⚙ Settings</b><button type="button" class="mt-link" data-kd="close">✕</button></div>' +
+      '<div class="st-tabs"><button type="button" data-st="key"' + (tab !== 'shortcut' ? ' class="on"' : '') + '>🔑 AI key (free)</button><button type="button" data-st="shortcut"' + (tab === 'shortcut' ? ' class="on"' : '') + '>📌 Shortcut</button></div><div id="st-body"></div>';
+    if (!d.open) d.showModal();
+    if (tab === 'shortcut') shortcutPane(); else keyDialog();
+  }
+  function shortcutPane() {
+    $('st-body').innerHTML = '<p class="muted">Come back to NeonClipping in one click. The shortcut opens it if it is running and starts it if not.</p>' +
+      '<div class="kd-grid"><button type="button" class="kd-p" data-sc="desk"><b>🖥 Desktop + Start Menu</b><small>An icon on your Desktop and in the Start Menu (Windows), or on the Desktop (Mac / Linux).</small></button>' +
+      '<button type="button" class="kd-p" data-sc="app"><b>⬇ Install as an app</b><small>Its own window and taskbar icon from Chrome or Edge, no browser tabs.</small></button></div><p class="muted" id="sc-note"></p>';
+  }
+  async function shortcutAction(kind) {
+    const note = t => { const n = $('sc-note'); if (n) n.innerHTML = t; };
+    if (kind === 'desk') { note('Making it…'); try { const r = await request('/shortcut', {}); note(r.made && r.made.length ? '✓ ' + esc(r.note) : '✗ ' + esc(r.note)); } catch (e) { note('✗ ' + esc(e.message)); } return; }
+    if (installPrompt) { installPrompt.prompt(); const c = await installPrompt.userChoice.catch(() => ({})); note(c.outcome === 'accepted' ? '✓ Installed. Find NeonClipping in your Start Menu / apps.' : 'Not installed.'); installPrompt = null; return; }
+    note('In Chrome: menu <b>⋮</b> → <b>Cast, save and share</b> → <b>Install page as app</b>. In Edge: menu <b>…</b> → <b>Apps</b> → <b>Install this site as an app</b>.');
+  }
+  function addSidebarItem() {
+    const side = document.querySelector('aside.sidebar'); if (!side || $('side-settings')) return;
+    const navs = side.querySelectorAll('.nav'); const last = navs[navs.length - 1]; if (!last) return;
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'nav'; b.id = 'side-settings'; b.innerHTML = '⚙ &nbsp; Settings';
+    b.onclick = () => settingsDialog('key'); last.after(b);
+  }
+
+  // ---------- API key pane
+  function keyDialog() {
+    const d = $('key-dialog');
+    $('st-body').innerHTML = '<p class="muted">A free key lets an online AI do the thinking (picking moments, hooks, titles, spelling) so a slow PC still feels fast. Only the <b>text</b> of a clip is sent; your video and audio stay on this PC. You can switch it off any time.</p>' +
       '<div class="kd-grid" id="kd-grid">Loading…</div><div class="kd-steps" id="kd-steps" hidden></div>';
-    d.showModal();
     request('/llm/settings').then(s => {
       const order = ['groq', 'gemini', 'nvidia', 'xai', 'openrouter', 'openai', 'lmstudio'], pr = s.presets || {};
       $('kd-grid').innerHTML = order.filter(k => pr[k]).map(k => '<button type="button" class="kd-p" data-prov="' + k + '"><b>' + esc(pr[k].label) + '</b><small>' + esc(pr[k].free || '') + '</small></button>').join('');
@@ -83,10 +113,11 @@
 
   document.addEventListener('click', e => {
     const b = e.target.closest('[data-mode]'); if (b && $('mode')) { $('mode').value = b.dataset.mode; $('mode').dispatchEvent(new Event('change', { bubbles: true })); draw(); return; }
-    if (e.target.closest('#mt-what')) { draw(); const p = $('mt-panel'); p.hidden = false; drawPanel(); return; }
-    if (e.target.closest('#mt-reset')) { own = {}; saveOwn(); draw(); $('mt-panel').hidden = false; drawPanel(); return; }
-    const f = e.target.closest('[data-feat]'); if (f && cat) { const feat = cat.features.find(x => x.key === f.dataset.feat); const def = feat.modes.includes(mode()); const next = !isOn(feat); if (next === def) delete own[feat.key]; else own[feat.key] = next; saveOwn(); drawPanel(); const w = $('mt-what'); if (w) w.innerHTML = '☰ What runs' + (Object.keys(own).length ? ' <i>' + Object.keys(own).length + ' changed</i>' : ''); return; }
-    if (e.target.closest('#mt-key')) { keyDialog(); return; }
+    if (e.target.closest('#mt-what')) { panelOpen = !panelOpen; draw(); return; }
+    if (e.target.closest('#mt-reset')) { own = {}; saveOwn(); draw(); return; }
+    if (e.target.closest('[data-sc]')) { shortcutAction(e.target.closest('[data-sc]').dataset.sc); return; }
+    const f = e.target.closest('[data-feat]'); if (f && cat) { const feat = cat.features.find(x => x.key === f.dataset.feat); const def = feat.modes.includes(mode()); const next = !isOn(feat); if (next === def) delete own[feat.key]; else own[feat.key] = next; saveOwn(); draw(); return; }
+    const stt = e.target.closest('[data-st]'); if (stt) { document.querySelectorAll('.st-tabs button').forEach(x => x.classList.toggle('on', x === stt)); if (stt.dataset.st === 'shortcut') shortcutPane(); else keyDialog(); return; }
     const pv = e.target.closest('[data-prov]'); if (pv) { document.querySelectorAll('.kd-p').forEach(x => x.classList.toggle('on', x === pv)); keySteps(pv.dataset.prov); return; }
     const mm = e.target.closest('[data-model]'); if (mm) { $('kd-model').value = mm.dataset.model; return; }
     const ka = e.target.closest('[data-kd]'); if (ka) keyAction(ka.dataset.kd);
@@ -102,7 +133,9 @@
   };
 
   async function init() {
-    ensureBalancedOption(); wrap();
+    ensureBalancedOption(); wrap(); addSidebarItem(); setTimeout(addSidebarItem, 800);
+    const ls = $('link-status');      // the default help line under the link box only shows once something happens
+    if (ls) { const upd = () => ls.classList.toggle('quiet', /^Frames arrive first/.test(ls.textContent.trim())); upd(); new MutationObserver(upd).observe(ls, { childList: true, characterData: true, subtree: true }); }
     const make = document.querySelector('.make-row') || ($('make') && $('make').closest('.url-row'));
     if (!make || $('mode-tiles')) return;
     const box = document.createElement('div'); box.id = 'mode-tiles'; box.className = 'mode-tiles'; make.after(box);
