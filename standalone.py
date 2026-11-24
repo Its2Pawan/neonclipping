@@ -200,7 +200,8 @@ def attach(app,DATA,state,probe):
             try:
                 id,p=download(url,job,body.get('source_height'),window=window);save(job,{'status':'done','id':id,**probe(p)})
             except TooLong as error:save(job,{'status':'needs_range','duration_total':error.duration,'title':error.title,'message':str(error),'max_range':MAX_RANGE})
-            except Exception as error:save(job,{'status':'error','error':'Import failed. Try the original MP4. '+str(error)[-500:]})
+            except Exception as error:      # plain words for the common failures
+                import friendly;plain,original=friendly.explain(str(error)[-500:]);save(job,{'status':'error','error':plain if plain!=original else 'Import failed. Try the original MP4. '+original,'error_detail':original})
         threading.Thread(target=work,daemon=True).start();return {'job':job}
 
     @app.get('/preview/{job}/{index}')
@@ -228,7 +229,8 @@ def attach(app,DATA,state,probe):
                 save(job,{'id':job,'status':'done','stage':'Candidates ready','progress':1,'source_id':source_id,'source':{'url':url},
                           'title':'Imported video' if url else 'Uploaded video','clips':clips,'engine':engine,
                           'elapsed_seconds':round(time.monotonic()-began,2),'meta':meta})
-            except Exception as error:save(job,{'id':job,'status':'error','error':str(error)[-700:]})
+            except Exception as error:
+                import friendly;plain,original=friendly.explain(str(error)[-700:]);save(job,{'id':job,'status':'error','error':plain,'error_detail':original})
         threading.Thread(target=work,daemon=True).start();return {'job':job}
 
     @app.get('/analysis/{job}')

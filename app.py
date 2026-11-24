@@ -250,7 +250,8 @@ def start_export(b,job=None):
    finished={'status':'done','file':job,'meta':probe(out),'encoder':encoder[1],'caption_words':len(visible_words),'srt':f'/text/{job}/srt' if visible_words else None}
    (DATA/(job+'.json')).write_text(json.dumps({'source':id,'settings':{**b,**saved_text,'words':words},'result':finished},indent=2),encoding='utf-8')
    state[job]=finished
-  except Exception as e:state[job]={'status':'error','error':str(e)}
+  except Exception as e:
+   import friendly;plain,original=friendly.explain(str(e)[-900:]);state[job]={'status':'error','error':plain,'error_detail':original}
  threading.Thread(target=work,daemon=True).start();return {'job':job}
 try:LIVE_AUTO_HOURS=max(.25,float(os.environ.get('NEONCLIPPING_LIVE_AUTO_HOURS','3')))   # unattended creator-watch sessions stop after this many hours
 except ValueError:LIVE_AUTO_HOURS=3.0
@@ -314,6 +315,13 @@ def start_make(b, previous=None):
  """One click. Short video: download, smart highlights, export. Long video (PeakCut-style): download AUDIO only, pick moments from
  audio + transcript, then fetch just those video sections. Clips stream into state[job]['clips']."""
  url,src0=app.neon['new_source'](b);save=app.neon['save']
+ import storage      # disk almost full is the commonest silent failure: free old partial downloads first, then say so plainly
+ free_=shutil.disk_usage(DATA).free
+ if free_<15*1024**3:
+  try:storage.apply(DATA,'temp')      # old .part files, leftover audio and preview folders only; never clips or sources
+  except Exception:pass
+  free_=shutil.disk_usage(DATA).free
+ if free_<2*1024**3:raise HTTPException(507,'Your disk is almost full (%.1f GB free). Open Storage in the left sidebar and press the clean-up buttons, then press Make clips again. Disk bhar gayi hai: left mein Storage kholo aur clean-up dabao.'%(free_/1024**3))
  try:
   count=max(1,min(12,int(b.get('count',4))));raw_max=float(b.get('max_len',b.get('length',60)));raw_min=float(b.get('min_len',30))
   if not (math.isfinite(raw_max) and math.isfinite(raw_min)):raise ValueError()
@@ -692,7 +700,8 @@ def start_make(b, previous=None):
     raise RuntimeError('Some clips failed. Resume this batch to retry the missing clips.')
    checkpoint_path.unlink(missing_ok=True)
    save(job,{'status':'done','stage':'Clips ready','phase':'complete','progress':1,'elapsed_seconds':round(time.monotonic()-began,1)})
-  except Exception as e:save(job,{'status':'error','error':str(e)[-600:]})
+  except Exception as e:      # plain words for the common failures (private video, no internet, disk full, FFmpeg missing...)
+   import friendly;plain,original=friendly.explain(str(e)[-600:]);save(job,{'status':'error','error':plain,'error_detail':original})
  threading.Thread(target=work,daemon=True).start();return {'job':job}
 LIVE={}
 
@@ -916,6 +925,15 @@ def report_send(b:dict):
 def report_log(b:dict):
  """The page reports errors it caught itself (a request that failed)."""
  report.log_error(str(b.get('stage') or 'page')[:80],str(b.get('error') or '')[:700]);return {'ok':True}
+@app.post('/readiness/fix')
+def readiness_fix(body:dict):
+ """The red FFmpeg chip: fetch the portable FFmpeg once (the same copy the installer uses) instead of sending people to a terminal."""
+ if body.get('key')!='ffmpeg':raise HTTPException(400,'Nothing to fix automatically for this item.')
+ if compat.ffmpeg_ready():return {'ok':True,'detail':'FFmpeg is already available.'}
+ try:ok=bool(compat.ensure_ffmpeg())
+ except Exception as e:raise HTTPException(502,'Could not download FFmpeg (no internet?): '+str(e)[-150:])
+ return {'ok':ok,'detail':'FFmpeg installed.' if ok else 'FFmpeg could not be installed. Run NeonClipping-Setup.bat again.'}
+
 @app.get('/readiness')
 def readiness():
  """One-line health of everything NeonClipping needs, each with a plain fix, shown at the top of the page."""

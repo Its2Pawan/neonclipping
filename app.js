@@ -458,7 +458,7 @@ const camReset=document.getElementById('cam-reset');if(camReset)camReset.onclick
 
 // System check line: FFmpeg, encoder, YouTube runtime, AI model, disk. A red item explains the fix when clicked.
 (async()=>{try{const r=await request('/readiness');const box=$('readiness');if(!box)return;box.replaceChildren();
- r.items.forEach(i=>{const s=document.createElement('span');s.className='rd '+(i.ok?'ok':'bad');const l=document.createElement('span');l.textContent=i.label;const b=document.createElement('b');b.textContent=(i.ok?'\u2713 ':'\u26A0 ')+i.detail;s.append(l,b);s.title=i.ok?i.detail:i.fix;if(!i.ok)s.onclick=()=>{status(i.label+': '+i.fix);};box.append(s);});
+ r.items.forEach(i=>{const s=document.createElement('span');s.className='rd '+(i.ok?'ok':'bad');const l=document.createElement('span');l.textContent=i.label;const b=document.createElement('b');b.textContent=(i.ok?'\u2713 ':'\u26A0 ')+i.detail;s.append(l,b);s.title=i.ok?i.detail:(i.key==='ffmpeg'?'Click to install FFmpeg automatically':i.fix);if(!i.ok)s.onclick=async()=>{if(i.key==='ffmpeg'){status('Installing FFmpeg (one time, about a minute)...');try{const r=await request('/readiness/fix',{key:'ffmpeg'});status(r.detail+(r.ok?' Reload the page.':''));}catch(e){status(e.message+' '+i.fix);}return;}if(i.key==='disk'){const sc=document.getElementById('side-storage');if(sc)sc.click();status('Disk almost full: use the clean-up buttons in Storage.');return;}status(i.label+': '+i.fix);};box.append(s);});
 }catch(e){}})();
 
 // Cloud AI panel (optional OpenAI-compatible provider)

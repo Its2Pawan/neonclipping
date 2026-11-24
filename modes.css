@@ -72,3 +72,11 @@ html body .clip-card .viral.lib{margin:6px 0 2px}
 html body .au-card .au-sw{flex-direction:row!important;align-items:center!important;justify-content:flex-start!important;gap:8px}
 html body .au-card .au-sw input{width:auto!important;margin:0}
 html body .au-card .kd-row label{display:flex;flex-direction:row;align-items:center;gap:6px}
+
+/* first-run quick start (viewer comment 24 Nov: "bhot complex lgra hai") */
+.qs{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin:0 0 12px;padding:10px 14px;border-radius:14px;background:linear-gradient(90deg,#ff3d6e1f,#25f4ee14);border:1px solid #ff3d6e55}
+.qs-steps{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-weight:700}
+.qs-steps span{display:inline-flex;align-items:center;gap:6px}.qs-steps b{width:22px;height:22px;border-radius:99px;background:#ff3d6e;color:#fff;display:grid;place-items:center;font-size:12px}
+.qs-steps i{color:#ff7a9c;font-style:normal}.qs-steps em{font-style:normal;color:#25f4ee}
+.qs small{flex:1 1 260px;color:#b9a9cc}
+html body .qs button{background:#ff3d6e!important;border-color:#ff3d6e!important;color:#fff!important;border-radius:99px;padding:5px 14px;font-weight:700;cursor:pointer}

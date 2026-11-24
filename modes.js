@@ -138,6 +138,7 @@
   }
 
   document.addEventListener('click', e => {
+    if (e.target.closest('[data-qs="close"]')) { try { localStorage.setItem('nc-quick', '1'); } catch (x) { } const q = $('quick-start'); if (q) q.remove(); return; }
     const b = e.target.closest('[data-mode]'); if (b && $('mode')) { $('mode').value = b.dataset.mode; $('mode').dispatchEvent(new Event('change', { bubbles: true })); draw(); return; }
     if (e.target.closest('#mt-what')) { panelOpen = !panelOpen; draw(); return; }
     if (e.target.closest('#mt-reset')) { own = {}; saveOwn(); draw(); return; }
@@ -163,6 +164,14 @@
     ensureBalancedOption(); wrap(); addSidebarItem(); setTimeout(addSidebarItem, 800);
     const ls = $('link-status');      // the default help line under the link box only shows once something happens
     if (ls) { const upd = () => ls.classList.toggle('quiet', /^Frames arrive first/.test(ls.textContent.trim())); upd(); new MutationObserver(upd).observe(ls, { childList: true, characterData: true, subtree: true }); }
+    let seen = false; try { seen = localStorage.getItem('nc-quick') === '1'; } catch (e) { }      // first-run quick start: three steps, gone for good after one click
+    const row = $('make') && $('make').closest('.url-row');
+    if (!seen && row && !$('quick-start')) {
+      const q = document.createElement('div'); q.id = 'quick-start'; q.className = 'qs';
+      q.innerHTML = '<div class="qs-steps"><span><b>1</b> Paste a video link</span><i>→</i><span><b>2</b> Pick <em>Fast</em></span><i>→</i><span><b>3</b> Press <em>Make clips</em></span></div>' +
+        '<small>That is all. Everything else (caption style, layout, Settings) is optional and is applied when you press Make clips.</small><button type="button" data-qs="close">Got it</button>';
+      row.before(q);
+    }
     const make = document.querySelector('.make-row') || ($('make') && $('make').closest('.url-row'));
     if (!make || $('mode-tiles')) return;
     const box = document.createElement('div'); box.id = 'mode-tiles'; box.className = 'mode-tiles'; make.after(box);
