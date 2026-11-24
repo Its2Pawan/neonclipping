@@ -67,7 +67,9 @@
     const side = document.querySelector('aside.sidebar'); if (!side || $('side-settings')) return;
     const navs = side.querySelectorAll('.nav'); const last = navs[navs.length - 1]; if (!last) return;
     const b = document.createElement('button'); b.type = 'button'; b.className = 'nav'; b.id = 'side-settings'; b.innerHTML = '⚙ &nbsp; Settings';
-    b.onclick = () => settingsDialog('key'); last.after(b);
+    b.onclick = () => settingsDialog('key');
+    const campaigns = $('side-campaigns');
+    if (campaigns) campaigns.before(b); else last.after(b);
   }
 
   // ---------- API key pane

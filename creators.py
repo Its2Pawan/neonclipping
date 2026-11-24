@@ -32,7 +32,7 @@ def parse_creator(text):
     if not t:
         raise ValueError('Type a Twitch name or paste a Twitch / YouTube channel link.')
     if 'youtu' in t:
-        m = re.search(r'youtube\.com/(@[A-Za-z0-9_.\-]{2,60}|channel/UC[A-Za-z0-9_-]{20,24}|c/[A-Za-z0-9_.\-]{2,60}|user/[A-Za-z0-9_.\-]{2,60})', t)
+        m = re.search(r'youtube\.com/(@[\w.\-]{2,60}|channel/UC[A-Za-z0-9_-]{20,24}|c/[\w.\-]{2,60}|user/[\w.\-]{2,60})', t)
         if not m:
             raise ValueError('Paste the YouTube channel link (youtube.com/@name or youtube.com/channel/...), not a video link.')
         path = m.group(1)
@@ -67,6 +67,15 @@ def live_target(creator):
     return None
 
 
+def read_store(data):
+    path = Path(data) / 'creators.store'
+    try:
+        rows = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return []
+    return rows if isinstance(rows, list) else []
+
+
 def attach(app, data, live, start_live):
     """Register the /creators routes and start the watcher thread.
     live = dict of LiveSession objects, start_live(target, opts, creator_id) starts one (raises RuntimeError if busy)."""
@@ -75,10 +84,7 @@ def attach(app, data, live, start_live):
     runtime = {}   # creator id -> {'live': bool, 'checked': ts, 'session': id, 'wait_until': ts, 'last_live': ts}
 
     def load():
-        try:
-            return json.loads(path.read_text(encoding='utf-8'))
-        except (OSError, ValueError):
-            return []
+        return read_store(data)
 
     def save(rows):
         tmp = path.with_suffix('.tmp')
@@ -144,20 +150,25 @@ def attach(app, data, live, start_live):
 
     def check(creator, start=True):
         """Check one creator; start live clipping if they are live and auto is on. Returns True if live."""
-        remember_stop_reasons()
-        rt = runtime.setdefault(creator['id'], {})
         target = live_target(creator)
-        rt['checked'] = time.time()
-        rt['live'] = bool(target)
-        if target:
-            rt['last_live'] = time.time()
-        if target and start and creator.get('auto') and not session_of(creator['id']) \
-                and time.time() >= rt.get('wait_until', 0) and not anything_running():
-            try:
-                rt['session'] = start_live(target, creator.get('opts') or {}, creator['id'])
-            except Exception as e:      # e.g. another session started a moment ago
-                rt['error'] = str(e)[:160]
-                rt['wait_until'] = time.time() + 60
+        with lock:
+            remember_stop_reasons()
+            cid = creator['id']
+            current = next((row for row in load() if row['id'] == cid), None)
+            if current is None:
+                return False
+            rt = runtime.setdefault(cid, {})
+            rt['checked'] = time.time()
+            rt['live'] = bool(target)
+            if target:
+                rt['last_live'] = time.time()
+            if target and start and current.get('auto') and not session_of(cid) \
+                    and time.time() >= rt.get('wait_until', 0) and not anything_running():
+                try:
+                    rt['session'] = start_live(target, current.get('opts') or {}, cid)
+                except Exception as e:
+                    rt['error'] = str(e)[:160]
+                    rt['wait_until'] = time.time() + 60
         return bool(target)
 
     def watcher():
@@ -195,7 +206,7 @@ def attach(app, data, live, start_live):
                 raise HTTPException(400, c['name'] + ' is already in your list.')
             if len(rows) >= 30:
                 raise HTTPException(400, 'The list holds up to 30 creators. Remove one first.')
-            c.update(id=uuid.uuid4().hex[:12], auto=True, added=time.time(), opts=opts_from(b))
+            c.update(id=uuid.uuid4().hex[:12], auto=b.get('auto', True) is not False, added=time.time(), opts=opts_from(b))
             rows.append(c)
             save(rows)
         threading.Thread(target=lambda: check(c), daemon=True).start()

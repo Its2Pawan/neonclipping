@@ -69,3 +69,8 @@ __pycache__/
 !library.js
 !modes.js
 !modes.css
+!campaigns.js
+!campaigns.css
+!campaigns.json
+!youtube-feed.js
+!youtube-feed.css

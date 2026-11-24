@@ -1,0 +1,21 @@
+{
+  "updated": "2026-11-24",
+  "platforms": [
+    {
+      "id": "contentrewards",
+      "name": "Content Rewards",
+      "referral_url": "https://contentrewards.com/r/iamajmeena",
+      "action": "Join Content Rewards",
+      "pays": "Per approved view, per post, retainers or pools",
+      "payout": "Via Whop",
+      "good_for": ["GTA", "Streams", "Podcasts"]
+    },
+    {
+      "id": "100x-clipping",
+      "name": "100x Clipping",
+      "referral_url": "https://whop.com/nova-corp-c696/nova-model-influencer-promo?a=rockstaraj",
+      "action": "Join free network",
+      "note": "Free Clipper Network on Whop. Check each campaign brief for eligibility and payout details."
+    }
+  ]
+}

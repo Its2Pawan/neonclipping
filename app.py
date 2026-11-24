@@ -73,7 +73,7 @@ def cover_image(id:str):
  return FileResponse(path,media_type='image/jpeg')
 @app.get('/assets/{name}')
 def assets(name:str):
- if name not in ('app.js','style.css','extras.js','transcripts.js','vision.js','report.js','studio.js','composer.js','composer.css','sidebar.js','library.js','right-bar.js','right-bar.css','editor.js','editor.css','capdraw.js','modes.js','modes.css'):raise HTTPException(404)
+ if name not in ('app.js','style.css','extras.js','transcripts.js','vision.js','report.js','studio.js','composer.js','composer.css','sidebar.js','library.js','right-bar.js','right-bar.css','editor.js','editor.css','capdraw.js','modes.js','modes.css','campaigns.js','campaigns.css','youtube-feed.js','youtube-feed.css'):raise HTTPException(404)
  return FileResponse(ROOT/name)
 @app.get('/text/{id}/{kind}')
 def text_file(id:str,kind:str):
@@ -311,6 +311,7 @@ def start_make(b, previous=None):
     fast=cached['fast'];title=cached['title'];video_lang=cached['language']
     found=cached['found'];engine=cached['engine'];sid=cached['sid'];p=DATA/cached['media']
     uploader=cached['uploader']
+    game_name=cached.get('game_name')
     save(job,{'engine':engine,'stage':'Resuming saved moments','candidates':len(found)})
    elif 'source_info' in checkpoint:
     src_info=checkpoint['source_info']
@@ -458,13 +459,13 @@ def start_make(b, previous=None):
    if not cached:      # 1F: the game's own tags go first on every post, whatever the AI wrote
     for c in found:
      seen=set();c['hashtags']=[x for x in list(game_tags)+list(c.get('hashtags') or []) if not (x.lower() in seen or seen.add(x.lower()))][:8]
-    if game_name:save(job,{'game':game_name})
+   if game_name:save(job,{'game':game_name})
    dropped_frozen=[]
    done=[];cam_use,game_use,cam_checked,layout_use=cam,game,not b.get('cam_auto',True),layout       # facecam search is on unless switched off
    if not cached:
     uploader=str((info.get('channel') or info.get('uploader') or '')) if url else ''
    checkpoint.update({'request':b,'plan':{'fast':fast,'title':title,'language':video_lang,'found':found,'engine':engine,
-                                  'sid':sid,'media':p.name,'uploader':uploader},'completed':completed})
+                                  'sid':sid,'media':p.name,'uploader':uploader,'game_name':game_name},'completed':completed})
    if cached and previous.get('framing'):
     cam_use,game_use,layout_use=previous['framing']
     cam_checked=True
@@ -529,6 +530,7 @@ def start_make(b, previous=None):
      if c.get('words') and any(DEVA_RX.search(str(w.get('text',''))) for w in c['words']):lang='hinglish'     # YouTube gave Hindi script although another language was picked
     body={'id':sid2,'start':start,'end':end,'layout':layout_use,'top':(top_h if isinstance(top_h,(int,float)) and .2<=top_h<=.5 else .32),'captions':True,'caption_style':style,'language':language,'hook':(' '.join(to_hinglish(w) for w in c.get('hook','').split()) if lang=='hinglish' else c.get('hook','')),
           'aspect':b.get('aspect','vertical'),'resolution':b.get('resolution',1080),'fps':b.get('fps',0),'title':c.get('title',''),'post_caption':post_text(c),'punch_words':c.get('highlight_words') or [],'hashtags':c.get('hashtags') or [],'description':c.get('description',''),'batch_id':job,'source_url':url,'cam':cam_use,'game':game_use,'features':c.get('features'),'weights_used':W,'moment_profile':profile,'focus_brief':focus_brief,'focus_match':c.get('focus_match'),'visual_review':c.get('visual_review')}
+    if game_name:body['game_name']=game_name
     for k in styling.KEYS+brands.KEYS+hooks.KEYS:
      if b.get(k) not in (None,''):body[k]=b[k]
     if b.get('credit_auto') and uploader and not body.get('credit'):body['credit']='Clip: '+uploader[:40]
@@ -880,6 +882,8 @@ facecam_detect.attach(app,DATA)
 brands.attach(app,DATA)
 import modes as _modes;_modes.attach(app)
 import shortcut;shortcut.attach(app)
+import campaigns;campaigns.attach(app,DATA)
+import youtube_feed;youtube_feed.attach(app,DATA)
 glossary.attach(app,DATA)
 hooks.attach(app)
 import transcripts

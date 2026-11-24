@@ -1,6 +1,9 @@
 # Changelog
 
 ## 2026-11-24
+- **Creators:** manage auto-clipping from its own sidebar tab. Saved YouTube channels also appear in the YouTube feed, and you can save a channel from its video or live card.
+- **YouTube:** see which gaming creators are live and browse recent uploads and replays. Sort by newest or by views per day, or send a video link straight to the clipping workspace.
+- **Campaigns:** open verified affiliate campaign links from the sidebar or a finished clip. Available filters include GTA, streams and India payouts.
 - **Hindi is always written in Hinglish** (Roman letters) in captions, hooks and titles, even when YouTube gives Hindi script or another caption language was picked. Only the हिंदी option keeps Devanagari. Spelling is chat-style: "ja raha hoon", "saccha", "shayad", "order" (not jaa, sachcha, shaayad, aardar).
 - **Your words:** change a word in the editor's transcript and press **Always fix**; every new clip spells it right from then on (names like Andy, English words said in a Hindi accent). Add or remove words in the editor under *Your words*. Works on YouTube captions and the speech model, before and after Hinglish, and keeps word timings.
 - **8 new caption styles** (Karaoke is the new default, TikTok, Pill, One word, Cinematic, Boxed, Outlined, Comic).

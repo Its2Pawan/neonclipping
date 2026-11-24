@@ -9,7 +9,7 @@
     const importPanel = view.querySelector('.import-panel');
     if (!importPanel) return;
     const panelOf = id => { const el = $(id); return el ? el.closest('section.panel,details.panel') : null; };
-    const tools = ['queue-panel', 'ai-panel', 'llm-panel'].map($).concat([view.querySelector('.creators-panel'), view.querySelector('.live-panel')]);
+    const tools = ['queue-panel', 'ai-panel', 'llm-panel', 'live-panel'].map($);
     const groups = [
       { key: 'options', label: '⚙ Clip options', panels: [$('part-pick'), $('yt-login'), panelOf('accurate')] },
       { key: 'frame', label: '▣ Frame & layout', panels: [panelOf('source')] },

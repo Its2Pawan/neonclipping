@@ -446,7 +446,7 @@
     if ($('clip-editor-view')) return; const nav = document.querySelector('[data-view=library]'); if (!nav) return;
     build();
     const btn = document.createElement('button'); btn.className = 'nav'; btn.type = 'button'; btn.id = 'nav-clip-editor'; btn.innerHTML = '✎ &nbsp; Editor'; nav.after(btn);
-    const views = ['editor-view', 'library-view', 'clip-editor-view'];
+    const views = ['editor-view', 'library-view', 'youtube-view', 'creators-view', 'clip-editor-view'];
     btn.onclick = () => { document.querySelectorAll('.nav').forEach(x => x.classList.toggle('active', x === btn)); views.forEach(v => { const el = $(v); if (el) el.hidden = v !== 'clip-editor-view'; }); show(); };
     document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => { $('clip-editor-view').hidden = true; btn.classList.remove('active'); if (playing) togglePlay(); }));
     window.openInEditor = id => { btn.click(); setTimeout(() => openClip(id), 50); };
