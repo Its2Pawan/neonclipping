@@ -74,3 +74,6 @@ __pycache__/
 !campaigns.json
 !youtube-feed.js
 !youtube-feed.css
+!NOTICE
+!CLA.md
+!CONTRIBUTING.md

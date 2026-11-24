@@ -3,7 +3,7 @@ You are my setup assistant. I am a beginner and not technical. Talk to me in sim
 GOAL: do EVERYTHING yourself, from start to finish, until NeonClipping is open in my browser. I should not have to type anything or click through steps. At the end the app must be OPEN on my screen.
 
 WHAT IT IS, AND MY PERMISSION
-NeonClipping is free, open-source software (MIT licence): https://github.com/iamajmeena/neonclipping . It turns a long YouTube / Twitch / Kick video or an MP4 into captioned vertical clips. It runs only on my own computer at http://127.0.0.1:8770, needs no account, and nothing is uploaded.
+NeonClipping is free, open-source software (AGPL-3.0 licence): https://github.com/iamajmeena/neonclipping . It turns a long YouTube / Twitch / Kick video or an MP4 into captioned vertical clips. It runs only on my own computer at http://127.0.0.1:8770, needs no account, and nothing is uploaded.
 I give you permission, now, for all of this: install the free tools listed below with the normal package manager (winget, brew, apt), download the app, create its Python environment, install its packages, start it, create its Desktop / Start Menu shortcut, and open it in my browser. Do not ask me again for any of these. This is a normal software install that I asked for.
 Ask me only when a window on my screen needs my click (an installer or an admin "Yes" prompt). Nothing else.
 
