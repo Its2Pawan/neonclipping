@@ -189,7 +189,7 @@ def snap(c,words,min_len,max_len,ext=None,source_end=None):
     duration=c['end']-c['start']
     words[:]=[dict(word,end=min(word['end'],duration)) for word in pool if 0<=word['start']<duration and word['end']>word['start']]
 
-def find(src,duration,count,length,report,language=None,data=None,min_len=None,motion=True,words=None,deep=False,weights=None,select=True,profile='balanced',brief='',includes=(),excludes=(),game=None,heat=None,chat=None):
+def find(src,duration,count,length,report,language=None,data=None,min_len=None,motion=True,words=None,deep=False,weights=None,select=True,profile='balanced',brief='',includes=(),excludes=(),game=None,heat=None,chat=None,whole=False):
     """Return up to `count` clips, best first. Always returns `count` when the source is long enough."""
     pool=(count*4+2) if deep else (count*2+1 if count<6 else count+4)
     if not words:pool=count+2 if not deep else min(pool,count*2+2)      # no free transcript: every candidate costs a speech-model pass, so read fewer
@@ -202,8 +202,9 @@ def find(src,duration,count,length,report,language=None,data=None,min_len=None,m
         h=np.zeros(int(np.ceil(duration)));h[:min(len(h),len(chat['heat']))]=chat['heat'][:len(h)]
         extra=h if extra is None else np.maximum(extra[:len(h)],h[:len(extra)]*.9)
     weights=weights or curation.profile_weights(learn.DEFAULT,profile)
+    sigs={}
     while length>=10:
-        clips=rank(src,duration,pool,length,lambda s:report(.0+.3*s/max(duration,1),f'Scanning movement + audio: {int(s)}/{int(duration)}s'),motion,extra)
+        clips=rank(src,duration,pool,length,lambda s:report(.0+.3*s/max(duration,1),f'Scanning movement + audio: {int(s)}/{int(duration)}s'),motion,extra,sigs)
         if len(clips)>=min(pool,count) or duration<length*count*.6 and length<=15:break
         length=max(10,length*.7)   # short source: shrink windows until enough clips fit
     if words and profile!='action':
@@ -215,6 +216,17 @@ def find(src,duration,count,length,report,language=None,data=None,min_len=None,m
         s=max(0,min(a+(b-a-length)/2,duration-length)) if b-a>length else max(0,min(a,duration-length));e=min(duration,s+length)
         if not any(min(e,c['end'])-max(s,c['start'])>.5*length for c in clips):clips.append({'start':round(s,2),'end':round(e,2),'title':'Asked moment','score':0,'reason':'Inside the time you asked for','status':'done','features':{}})
     model=_model(deep or profile!='action');engine='mixed activity + transcript'
+    # 1C: the AI also reads the WHOLE transcript (Balanced / Deep). With Cloud AI any length; with a local model only up to 30 min,
+    # because a small local model needs ~45-75 s per 5 minutes of talk (measured 24 Nov, llama3.2:3b) and gemma4:e2b crashed Ollama 0.32.6
+    # on these longer prompts (llama-server 0xc0000409), so the plain local model is used for this pass.
+    wp_model=llm.model_name() or (_model(False) if duration<=1800 else None)
+    if (deep or whole) and words and wp_model:
+        import wholepass, games
+        loud=np.maximum(sigs['loud'],sigs.get('bang',sigs['loud'])) if 'loud' in sigs else None
+        picks=wholepass.proposals(wp_model,words,duration,min_len or length*.5,length,count,loud,chat['heat'] if chat else None,games.rules(game),lambda f,m:report(.3,m))
+        added=[p for p in picks if not any(min(p['end'],c['end'])-max(p['start'],c['start'])>.5*(p['end']-p['start']) for c in clips)]
+        clips+=added
+        if picks:engine+=f' + whole-talk AI ({len(picks)} picks)'
     for i,c in enumerate(clips):
         report(.3+.65*i/len(clips),f'Reading moment {i+1}/{len(clips)}')
         try:
