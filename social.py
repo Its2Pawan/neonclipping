@@ -1,5 +1,6 @@
 """Optional direct publishing. Tokens stay in the process environment."""
 import json
+import math
 from contextlib import contextmanager
 import os
 import sqlite3
@@ -135,6 +136,25 @@ def connect(data):
         db.close()
 
 
+def pick_post_slot(earliest, previous, gap_minutes, daily_cap, tz_minutes):
+    """Find the first permitted local-day slot without moving other queued posts."""
+    gap = gap_minutes * 60
+    offset = tz_minutes * 60
+    candidate = earliest
+    for past in sorted(previous):
+        if gap and abs(candidate - past) < gap:
+            candidate = past + gap
+    while daily_cap:
+        day = math.floor((candidate + offset) / 86400)
+        if sum(math.floor((stamp + offset) / 86400) == day for stamp in previous) < daily_cap:
+            break
+        candidate = (day + 1) * 86400 - offset
+        for past in sorted(previous):
+            if gap and abs(candidate - past) < gap:
+                candidate = past + gap
+    return candidate
+
+
 def attach(app,data,state,probe):
     with connect(data) as db:
         db.execute("CREATE TABLE IF NOT EXISTS posts(id TEXT PRIMARY KEY, payload TEXT, status TEXT, external TEXT, metrics TEXT, error TEXT)")
@@ -142,17 +162,24 @@ def attach(app,data,state,probe):
         job=uuid.uuid4().hex
         state[job]={"status":"running","stage":"Sending to platform"}
         def worker():
+            sending=False
             try:
                 with connect(data) as db:
                     changed=db.execute("UPDATE posts SET status='sending' WHERE id=? AND status='waiting'",(body["post"],)).rowcount
                     if not changed:raise ValueError("This post was already attempted. Check its platform status.")
                     row=json.loads(db.execute("SELECT payload FROM posts WHERE id=?",(body["post"],)).fetchone()[0])
+                media_path(data,row['clip'])
+                current=account(row['platform'])
+                if current['id']!=row['account'] or row['privacy'] not in current['privacy']:
+                    raise ValueError("The publishing account or visibility changed. Check the destination.")
+                sending=True
                 external=publish(row,data)
                 with connect(data) as db:db.execute("UPDATE posts SET status='submitted',external=? WHERE id=?",(external,body["post"]))
                 state[job]={"status":"done","stage":"Submitted to "+row["platform"]}
             except Exception as e:
                 error=str(e) if isinstance(e,ValueError) else "Posting failed. Check the platform account."
-                with connect(data) as db:db.execute("UPDATE posts SET status='check platform',error=? WHERE id=? AND status='sending'",(error,body.get("post","")))
+                stage='check platform' if sending else 'retryable'
+                with connect(data) as db:db.execute("UPDATE posts SET status=?,error=? WHERE id=? AND status='sending'",(stage,error,body.get("post","")))
                 state[job]={"status":"error","error":error}
         threading.Thread(target=worker,daemon=True).start()
         return {"job":job}
@@ -165,10 +192,13 @@ def attach(app,data,state,probe):
     @app.get("/social/posts")
     def posts():
         with connect(data) as db:
-            jobs={json.loads(j["payload"]).get("post"):dict(j) for j in db.execute("SELECT id,status,payload FROM jobs WHERE kind='social' ORDER BY created")}
+            jobs={json.loads(j["payload"]).get("post"):dict(j) for j in db.execute("SELECT id,status,payload,created,updated,not_before FROM jobs WHERE kind='social' ORDER BY created")}
             return [{"id":r["id"],"job":jobs.get(r["id"],{}).get("id"),
                      "status":jobs.get(r["id"],{}).get("status","waiting") if r["status"]=="waiting" else r["status"],"external":r["external"],"metrics":json.loads(r["metrics"] or "{}"),
-                     "error":r["error"],**json.loads(r["payload"])} for r in db.execute("SELECT * FROM posts ORDER BY rowid DESC LIMIT 100")]
+                     "error":r["error"],
+                     "scheduled_at":jobs.get(r['id'],{}).get('not_before'),
+                     "submitted_at":jobs.get(r['id'],{}).get('updated') if r['status']=='submitted' else None,
+                     **json.loads(r["payload"])} for r in db.execute("SELECT * FROM posts ORDER BY rowid DESC LIMIT 100")]
 
     @app.post("/social/posts")
     def submit(body:dict):
@@ -184,9 +214,12 @@ def attach(app,data,state,probe):
             if not title or len(title)>(100 if platform=="youtube" else 2200):raise ValueError("Enter a title within the platform limit.")
             when=float(body.get("when",0))
             if when and not time.time()<when<time.time()+366*86400:raise ValueError("Choose a future time within one year.")
+            minutes=int(body.get('gap_minutes',0));cap=int(body.get('daily_cap',0));offset=int(body.get('offset_minutes',0))
+            if not (0<=minutes<=1440 and 0<=cap<=24 and -720<=offset<=840):raise ValueError('Check the post interval and daily limit.')
             row={"platform":platform,"account":acct["id"],"name":acct["name"],"clip":clip,"title":title,"when":when,
                  "privacy":body["privacy"],"media_url":str(body.get("media_url","")) if platform=="instagram" else "",
-                 "own_brand":bool(body.get("own_brand")),"paid":bool(body.get("paid"))}
+                 "own_brand":bool(body.get("own_brand")),"paid":bool(body.get("paid")),
+                 "gap_minutes":minutes,"daily_cap":cap,"offset_minutes":offset}
             if platform=="instagram" and not row["media_url"].startswith("https://"):raise ValueError("Enter the hosted HTTPS URL of the selected clip.")
             identifier=uuid.UUID(body["request_id"]).hex
             with connect(data) as db:
@@ -195,12 +228,44 @@ def attach(app,data,state,probe):
                 if existing:
                     if json.loads(existing[0])!=row:raise ValueError("Use a fresh post request.")
                     return {"post":identifier}
-                db.execute("INSERT INTO posts VALUES(?,?,'waiting',NULL,NULL,NULL)",(identifier,json.dumps(row)))
-                created=time.time()
-                db.execute("INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?,?)",(uuid.uuid4().hex,"social",json.dumps({"post":identifier}),"queued",created,created,when,None,"{}",0))
-            app.processing_queue.wake.set()
+                draft=body.get('draft') is True
+                db.execute("INSERT INTO posts VALUES(?,?,?,NULL,NULL,NULL)",(identifier,json.dumps(row),'draft' if draft else 'waiting'))
+                if not draft:
+                    queue_post(db,identifier,row)
+            if not draft:app.processing_queue.wake.set()
             return {"post":identifier}
-        except (OSError,KeyError,ValueError,TypeError) as error:raise HTTPException(400,str(error)) from error
+        except (OSError,KeyError,ValueError,TypeError,OverflowError) as error:raise HTTPException(400,str(error)) from error
+
+    def queue_post(db, identifier, row):
+        now=time.time()
+        records=db.execute(
+            """SELECT p.payload,p.status,j.created,j.updated,j.not_before
+               FROM posts p JOIN jobs j ON json_extract(j.payload,'$.post')=p.id
+               WHERE p.id!=? AND j.kind='social' AND j.status!='canceled'
+                 AND p.status IN ('waiting','sending','check platform','submitted')""",
+            (identifier,),
+        )
+        previous=[]
+        for record in records:
+            other=json.loads(record['payload'])
+            if (other['platform'],other['account'])!=(row['platform'],row['account']):continue
+            previous.append(record['updated'] if record['status']=='submitted' else record['not_before'] or record['created'])
+        when=pick_post_slot(max(float(row.get('when',0)),now),previous,row.get('gap_minutes',0),row.get('daily_cap',0),row.get('offset_minutes',0))
+        db.execute("INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?,?)",(uuid.uuid4().hex,"social",json.dumps({"post":identifier}),"queued",now,now,when,None,"{}",0))
+        return when
+
+    @app.post('/social/posts/{post}/approve')
+    def approve(post:str):
+        with connect(data) as db:
+            db.execute("BEGIN IMMEDIATE")
+            draft=db.execute("SELECT payload,status FROM posts WHERE id=?",(post,)).fetchone()
+            if not draft or draft['status'] not in ('draft','retryable'):
+                raise HTTPException(409,'This draft is no longer awaiting approval.')
+            row=json.loads(draft['payload'])
+            when=queue_post(db,post,row)
+            db.execute("UPDATE posts SET status='waiting',error=NULL WHERE id=?",(post,))
+        app.processing_queue.wake.set()
+        return {'scheduled_at':when}
 
     @app.post("/social/posts/{post}/metrics")
     def refresh(post:str):

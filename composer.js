@@ -205,7 +205,7 @@
     async function progressOf(id) {
       try {
         const r = await fetch('/make/' + id);
-        if (r.ok) { const j = await r.json(); progressCache[id] = { p: j.progress, title: j.title || '', show: true }; }
+        if (r.ok) { const j = await r.json(); progressCache[id] = { p: j.progress, phase: j.phase, title: j.title || '', show: true }; }
         else { const r2 = await fetch('/status/' + id); if (r2.ok) { const j = await r2.json(); progressCache[id] = { p: j.progress, title: j.title || '', show: !!j.url }; } }
       } catch (e) { /* ignore */ }
       return progressCache[id] || {};
@@ -222,13 +222,13 @@
         if (queuedChild.has(a.id)) continue;
         const pr = await progressOf(a.id);
         if (pr.show === false) continue;          // an internal render step of a bigger job
-        items.push({ kind: 'run', title: pr.title || 'Clip job ' + a.id.slice(0, 6), stage: a.stage || a.status, p: pr.p, id: a.id });
+        items.push({ kind: 'run', title: pr.title || 'Clip job ' + a.id.slice(0, 6), stage: a.stage || a.status, p: pr.p, phase: pr.phase, id: a.id });
       }
       for (const j of queue.jobs || []) {
         const url = (j.payload && (j.payload.url || j.payload.id)) || 'Saved clip';
         if (j.status === 'running') {
           const pr = j.child ? await progressOf(j.child) : {};
-          items.push({ kind: 'run', title: nice(url), stage: (j.result && j.result.stage) || 'Running', p: pr.p, id: j.id, queued: true });
+          items.push({ kind: 'run', title: nice(url), stage: (j.result && j.result.stage) || 'Running', p: pr.p, phase: pr.phase, id: j.id, queued: true });
         } else if (j.status === 'queued') {
           items.push({ kind: 'wait', title: nice(url), stage: j.not_before > Date.now() / 1000 ? 'Scheduled' : 'Waiting for its turn', id: j.id });
         } else if (['error', 'interrupted'].includes(j.status) && Date.now() / 1000 - (j.updated || 0) < 3 * 3600) {
@@ -247,7 +247,7 @@
         const bar = i.kind === 'run' ? '<div class="abar"><i style="width:' + (pct == null ? 35 : pct) + '%"' + (pct == null ? ' class="indet"' : '') + '></i></div>' : '';
         const action = i.kind === 'wait' ? '<button type="button" class="mini-btn" data-act="cancel" data-id="' + esc(i.id) + '">Cancel</button>'
           : i.kind === 'bad' ? '<button type="button" class="mini-btn" data-act="retry" data-id="' + esc(i.id) + '">Retry</button>' : '';
-        return '<div class="arow ' + i.kind + '"><span class="achip">' + chip + '</span><div class="atext"><b>' + esc(i.title) + '</b><small>' + esc(String(i.stage).slice(0, 140)) + (pct != null && i.kind === 'run' ? ' · ' + pct + '%' : '') + '</small>' + bar + '</div>' + action + '</div>';
+        return '<div class="arow ' + i.kind + '"><span class="achip">' + chip + '</span><div class="atext"><b>' + esc(i.title) + '</b><small>' + esc(String(i.stage).slice(0, 140)) + (pct != null && i.kind === 'run' ? ' · ' + pct + '%' : '') + '</small>' + bar + makeStepsMarkup(i.phase) + '</div>' + action + '</div>';
       }).join('');
     }
     $('activity-list').addEventListener('click', async e => {

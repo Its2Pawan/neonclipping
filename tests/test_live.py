@@ -12,6 +12,17 @@ class Spike(unittest.TestCase):
     def test_big_burst_is_a_spike(self):
         self.assertTrue(L.is_spike(30, self.quiet))
 
+    def test_live_spike_cannot_be_faked_by_one_known_chatter(self):
+        self.assertFalse(L.broad_spike(40, self.quiet, 1))
+        self.assertTrue(L.broad_spike(40, self.quiet, 8))
+        self.assertTrue(L.broad_spike(40, self.quiet, 0))
+
+    def test_interval_options(self):
+        self.assertEqual(5, L.clip_interval(5))
+        for bad in (True, "5", -1, 1, 99):
+            with self.assertRaises(ValueError):
+                L.clip_interval(bad)
+
     def test_normal_chat_is_not(self):
         for c in (0, 3, 5, 7):
             self.assertFalse(L.is_spike(c, self.quiet), c)

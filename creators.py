@@ -23,7 +23,7 @@ ERROR_COOLDOWN = 300         # after a failed start, wait 5 minutes
 from styling import KEYS as STYLE_KEYS
 from brands import KEYS as BRAND_KEYS
 from hooks import KEYS as HOOK_KEYS
-OPT_KEYS = ('aspect','resolution','fps','layout', 'cam', 'game', 'top', 'caption_style', 'language')+STYLE_KEYS+BRAND_KEYS+HOOK_KEYS
+OPT_KEYS = ('aspect','resolution','fps','layout', 'cam', 'game', 'top', 'caption_style', 'language', 'clip_every')+STYLE_KEYS+BRAND_KEYS+HOOK_KEYS
 
 
 def parse_creator(text):
@@ -130,6 +130,12 @@ def attach(app, data, live, start_live):
         return out
 
     def opts_from(body, old=None):
+        if body.get('clip_every') is not None:
+            from live_session import clip_interval
+            try:
+                clip_interval(body['clip_every'])
+            except ValueError as err:
+                raise HTTPException(400, str(err)) from err
         o = dict(old or {})
         for k in OPT_KEYS:
             if body.get(k) is not None:

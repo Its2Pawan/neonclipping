@@ -48,6 +48,35 @@ def describe(name,jpeg):
     if not answer:raise ValueError('The visual model returned no description.')
     return answer[:1200]
 
+
+def inspect_facecam(source, at, box, name, reaction=False):
+    """Check one small crop locally. Uncertain responses never override geometry."""
+    import smart
+    w,h,x,y=(min(1,max(0,float(box[k]))) for k in ('w','h','x','y'))
+    w=min(w,1-x);h=min(h,1-y)
+    if min(w,h)<.01:return {'facecam':'unclear','reaction':'unclear'}
+    vf=f'crop=iw*{w:.6f}:ih*{h:.6f}:iw*{x:.6f}:ih*{y:.6f},scale=320:-2'
+    jpeg=subprocess.check_output(
+        ['ffmpeg','-nostdin','-v','error','-ss',str(at),'-i',str(source),'-frames:v','1','-vf',vf,'-f','image2pipe','-vcodec','mjpeg','-'],
+        timeout=12,
+    )
+    if not jpeg:return {'facecam':'unclear','reaction':'unclear'}
+    prompt=('Is this crop a real person visible in a webcam video? Game characters, logos and avatars do not count. '
+            'Return JSON only with facecam: yes, no or unclear. ')
+    if reaction:
+        prompt+='Also return reaction: laugh, surprise, neutral or unclear. Use only the visible expression in this frame.'
+    payload=smart._payload(name,prompt,80,0)
+    payload['images']=[base64.b64encode(jpeg).decode()]
+    request=urllib.request.Request(OLLAMA+'/api/generate',json.dumps(payload).encode(),{'Content-Type':'application/json'})
+    reply=json.load(urllib.request.urlopen(request,timeout=45)).get('response','')
+    try:result=json.loads(reply)
+    except (TypeError,ValueError):result={}
+    if not isinstance(result,dict):result={}
+    facecam=str(result.get('facecam','')).lower()
+    mood=str(result.get('reaction','')).lower()
+    return {'facecam':facecam if facecam in ('yes','no') else 'unclear',
+            'reaction':mood if facecam=='yes' and mood in ('laugh','surprise','neutral') else 'unclear'}
+
 def review(source,start,duration,data,report=lambda text:None):
     name=model()
     if not name:raise ValueError('Install a compatible local Gemma4 vision model in Ollama to use visual review.')

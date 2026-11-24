@@ -330,7 +330,7 @@ class Plan:
         return under, ev
 
     # ---- audio
-    def audio(self, duration):
+    def audio(self, duration, source="[0:a]"):
         """-> (filter_complex_part or None, map label or None). Source audio is label [0:a]."""
         if not self.music:
             return None, None
@@ -338,8 +338,8 @@ class Plan:
         d, v, p, r = duration, self.music_volume, self.music_peak, min(self.music_riser, duration)
         rise = f"if(lt(t,{d - r:.3f}),{v:.3f},{v:.3f}+({p:.3f}-{v:.3f})*(t-{d - r:.3f})/{r:.3f})"
         bed = f"[{idx}:a]atrim=0:{d:.3f},asetpts=PTS-STARTPTS,volume='{rise}':eval=frame[bed]"
-        if self.has_audio:
-            return bed + ';[0:a]aresample=48000[voice];[voice][bed]amix=inputs=2:duration=first:normalize=0:dropout_transition=0[aout]', '[aout]'
+        if self.has_audio or source != "[0:a]":
+            return bed + f';{source}aresample=48000[voice];[voice][bed]amix=inputs=2:duration=first:normalize=0:dropout_transition=0[aout]', '[aout]'
         return bed + ';[bed]anull[aout]', '[aout]'
 
 

@@ -12,7 +12,11 @@ class Modes(unittest.TestCase):
 
     def test_balanced_and_best(self):
         self.assertTrue(modes.resolve('balanced')['caption_fix'] and not modes.resolve('balanced')['deep_scan'])
-        self.assertTrue(all(modes.resolve('deep').values()))
+        best=modes.resolve('deep')
+        self.assertTrue(all(value for key,value in best.items() if key not in ('facecam_check','face_reaction')))
+        self.assertFalse(best['facecam_check'])
+        self.assertFalse(best['face_reaction'])
+        self.assertTrue(modes.resolve('deep',{'face_reaction':True})['face_reaction'])
 
     def test_tiles_override_and_junk_ignored(self):
         f = modes.resolve('fast', {'whole_pass': True, 'chat_replay': False, 'nope': True, 'rerank': 'yes'})

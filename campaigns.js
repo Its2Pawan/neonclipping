@@ -10,6 +10,21 @@
     return node;
   };
 
+  function affiliateLink(platform, label) {
+    const link = element('a', 'campaign-join', label + ' ↗');
+    link.href = platform.referral_url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer sponsored';
+    link.setAttribute('aria-label', link.textContent + ' · ' + platform.name + ' (opens in new tab)');
+    const countClick = () => fetch('/campaigns/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: platform.id }), keepalive: true,
+    }).catch(() => {});
+    link.addEventListener('click', countClick);
+    link.addEventListener('auxclick', event => { if (event.button === 1) countClick(); });
+    return link;
+  }
+
   function cardFor(platform) {
     const card = element('article', 'campaign-card');
     const mark = element('span', 'campaign-mark', platform.name[0]);
@@ -27,23 +42,60 @@
     for (const [label, value] of facts) {
       if (value) details.append(element('dt', '', label), element('dd', '', value));
     }
-    const link = element('a', 'campaign-join', (platform.action || 'Join') + ' ↗');
-    link.href = platform.referral_url;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer sponsored';
-    link.setAttribute('aria-label', link.textContent + ' · ' + platform.name + ' (opens in new tab)');
-    const countClick = () => fetch('/campaigns/open', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: platform.id }), keepalive: true,
-    }).catch(() => {});
-    link.addEventListener('click', countClick);
-    link.addEventListener('auxclick', event => { if (event.button === 1) countClick(); });
     const footer = element('footer', 'campaign-card-footer');
     footer.append(element('span', 'campaign-disclosure', 'Affiliate link'));
-    footer.append(link);
+    footer.append(affiliateLink(platform, platform.action || 'Join'));
     card.append(heading, tags, details);
     if (platform.note) card.append(element('small', 'campaign-note', platform.note));
     card.append(footer);
+    return card;
+  }
+
+  const usd = new Intl.NumberFormat('en-US', {
+    style: 'currency', currency: 'USD', minimumFractionDigits: 0,
+  });
+  const wholeUsd = new Intl.NumberFormat('en-US', {
+    style: 'currency', currency: 'USD', maximumFractionDigits: 0,
+  });
+
+  function dealCard(deal) {
+    const card = element('article', 'campaign-deal');
+    const poster = element('div', 'campaign-poster');
+    const img = element('img');
+    img.src = deal.poster;
+    img.alt = '';
+    img.decoding = 'async';
+    img.referrerPolicy = 'no-referrer';
+    poster.append(img);
+
+    const body = element('div', 'campaign-deal-body');
+    const amount = element('div', 'campaign-money');
+    const pool = deal.kind === 'pool';
+    let price = pool ? wholeUsd.format(deal.amount) : usd.format(deal.amount);
+    if (deal.variable) price = 'Up to ' + price;
+    else if (!pool && deal.minimum < deal.amount) price = usd.format(deal.minimum) + '–' + price;
+    amount.append(element('strong', '', price),
+      element('span', '', pool ? 'total prize pool' : 'per 1,000 eligible views'));
+    body.append(amount, element('h4', '', deal.title));
+    const facts = [deal.organizer];
+    if (pool && deal.shared_by_views) facts.push('Shared by views');
+    else if (deal.budget) facts.push(wholeUsd.format(deal.budget) + ' total budget');
+    body.append(element('p', '', facts.filter(Boolean).join(' · ')));
+    const copy = element('button', 'mini-btn campaign-copy', 'Copy campaign name');
+    copy.type = 'button';
+    copy.setAttribute('aria-label', 'Copy campaign name · ' + deal.title);
+    copy.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(deal.title);
+        copy.textContent = 'Copied';
+      } catch {
+        copy.textContent = 'Copy unavailable';
+      }
+    };
+    const actions = element('div', 'campaign-deal-actions');
+    actions.append(copy, element('span', 'campaign-deal-status', 'Accepting clips'));
+    body.append(actions);
+    card.append(poster, body);
     return card;
   }
 
@@ -57,11 +109,17 @@
     </div>
     <button type="button" class="mini-btn" data-campaign-close autofocus>Close</button>
   </header>
-  <ol class="campaign-steps">
-    <li><span aria-hidden="true">◎</span>Pick a brief</li>
-    <li><span aria-hidden="true">✂</span>Make and post your clip</li>
-    <li><span aria-hidden="true">↗</span>Submit your post link</li>
-  </ol>
+  <section class="campaign-featured" aria-labelledby="campaign-featured-title" hidden>
+    <div class="campaign-featured-header">
+      <div><h3 id="campaign-featured-title">Featured payouts</h3>
+        <p>Open clipping campaigns on Content Rewards</p>
+      </div>
+      <div class="campaign-featured-action"><span class="campaign-disclosure">Affiliate link</span></div>
+    </div>
+    <div class="campaign-deal-grid"></div>
+    <p class="campaign-deal-note" role="status"></p>
+  </section>
+  <h3 class="campaign-directory-title">Partner platforms</h3>
   <div class="campaign-filters" role="group" aria-label="Campaign filters"></div>
   <div class="campaign-feedback" role="status"></div>
   <div class="campaign-grid"></div>`;
@@ -71,9 +129,35 @@
   const feedback = dialog.querySelector('.campaign-feedback');
   const grid = dialog.querySelector('.campaign-grid');
   const disclosure = dialog.querySelector('.campaign-disclosure');
+  const featured = dialog.querySelector('.campaign-featured');
+  const dealsGrid = dialog.querySelector('.campaign-deal-grid');
+  const dealNote = dialog.querySelector('.campaign-deal-note');
+  const featuredAction = dialog.querySelector('.campaign-featured-action');
   let currentFilter = 'all';
   let platforms = [];
   let loadNumber = 0;
+
+  async function loadDeals(platform, attempt) {
+    if (!platform) return;
+    featured.hidden = false;
+    featuredAction.replaceChildren(element('span', 'campaign-disclosure', 'Affiliate link'),
+      affiliateLink(platform, platform.action || 'Join Content Rewards'));
+    dealNote.textContent = 'Checking open campaigns…';
+    try {
+      const reply = await fetch('/campaigns/deals', { cache: 'no-store' });
+      if (!reply.ok) throw new Error('Public deals unavailable');
+      const data = await reply.json();
+      if (attempt !== loadNumber) return;
+      dealsGrid.replaceChildren(...data.deals.map(dealCard));
+      const checked = data.checked && new Date(data.checked);
+      dealNote.textContent = data.deals.length
+        ? 'Checked ' + checked.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) +
+          ' · USD · Check each brief for eligibility and payout terms.'
+        : 'No featured offers are available right now.';
+    } catch {
+      if (attempt === loadNumber) dealNote.textContent = 'Featured offers are temporarily unavailable.';
+    }
+  }
 
   function render() {
     for (const button of chips.children) {
@@ -106,6 +190,8 @@
     currentFilter = filter;
     chips.hidden = true;
     disclosure.hidden = true;
+    featured.hidden = true;
+    dealsGrid.replaceChildren();
     grid.replaceChildren();
     feedback.textContent = 'Loading campaigns…';
     if (!dialog.open) dialog.showModal();
@@ -120,6 +206,7 @@
       chips.hidden = platforms.length < 2;
       if (chips.hidden) currentFilter = 'all';
       render();
+      loadDeals(platforms.find(platform => platform.id === 'contentrewards'), attempt);
     } catch {
       if (attempt !== loadNumber) return;
       feedback.textContent = 'Campaigns could not load. ';

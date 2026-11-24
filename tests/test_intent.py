@@ -5,6 +5,10 @@ import intent
 
 
 class Direction(unittest.TestCase):
+    def test_explicit_number_of_clips_overrides_the_picker(self):
+        self.assertEqual(5,intent.requested_count('5 funny clips. Return 5 clips near the end.',4))
+        self.assertEqual(12,intent.requested_count('20 clips banao',4))
+        self.assertEqual(4,intent.requested_count('around 5 minutes',4))
     def test_times_ranges_and_words(self):
         d = intent.parse('funny moments first, more from around 1:35:00, 10:00-12:00 and the chase near the end', 7200)
         self.assertIn((5640.0, 5760.0), d['spans'])

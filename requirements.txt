@@ -11,4 +11,5 @@ pytchat
 av>=11,<19
 static-ffmpeg
 requests>=2.32,<3
+beautifulsoup4>=4.12,<5
 keyring>=25,<26

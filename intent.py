@@ -12,6 +12,7 @@ import re
 _T = r'(\d{1,2}:\d{2}(?::\d{2})?|\d+(?:\.\d+)?\s*(?:h|hr|hour|hours|ghante?|m|min|mins|minute|minutes|minat|s|sec|secs|second|seconds))'
 _RANGE = re.compile(_T + r'\s*(?:-|–|to|se|till|tak|until)\s*' + _T, re.I)
 _ONE = re.compile(_T, re.I)
+_COUNT = re.compile(r'\b(\d{1,2})\s*(?:clips?|moments?|shorts?)\b(?!\s+(?:in|at|per)\b)', re.I)
 STYLE_WORDS = {
     'humour': ('funny', 'comedy', 'joke', 'laugh', 'hasi', 'hansi', 'mazak', 'mazaak', 'meme', 'lol'),
     'action': ('hype', 'action', 'fight', 'chase', 'kill', 'clutch', 'crash', 'police', 'shootout', 'ladai', 'maar'),
@@ -32,6 +33,11 @@ def seconds(token):
         return None
     value, unit = float(m.group(1)), m.group(2)
     return value * (3600 if unit[0] == 'h' or unit.startswith('ghant') else 60 if unit[0] == 'm' else 1)
+
+
+def requested_count(text, default):
+    match = _COUNT.search(text or '')
+    return max(1, min(12, int(match.group(1)))) if match else default
 
 
 def parse(text, duration):

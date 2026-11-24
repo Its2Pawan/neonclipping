@@ -101,7 +101,7 @@ body:has(:is(#youtube-view, #creators-view):not([hidden])) :is(main > header, ma
   html body .sidebar { flex-wrap: wrap; gap: 5px; }
   .sidebar .brand { flex-basis: 100%; }
   .sidebar .nav { white-space: nowrap; padding-inline: 7px; }
-  body:has(:is(#youtube-view, #creators-view):not([hidden])) :is(#side-storage, #side-version, #report-side, .side-toggle, #supporters, #rp-btn) {
+  body:has(:is(#youtube-view, #creators-view, #clip-editor-view):not([hidden])) :is(#side-storage, #side-version, #report-side, .side-toggle, #supporters, #rp-btn) {
     display: none;
   }
 }

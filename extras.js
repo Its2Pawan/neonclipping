@@ -221,7 +221,8 @@
   if (liveBox && !$('lv-len')) {
     const opts = document.createElement('div');
     opts.className = 'controls'; opts.id = 'live-opts';
-    opts.innerHTML = '<label>Clip length<select id="lv-len"><option value="10">10 s (short)</option><option value="20" selected>20 s (reel)</option><option value="30">30 s (viral)</option><option value="0">Auto (38 s)</option></select></label>' +
+      opts.innerHTML = '<label>Clip length<select id="lv-len"><option value="10">10 s (short)</option><option value="20" selected>20 s (reel)</option><option value="30">30 s (viral)</option><option value="0">Auto (38 s)</option></select></label>' +
+        '<label>Automatic clips<select id="lv-every"><option value="0">Chat spikes only</option><option value="2">Also every 2 min</option><option value="5">Also every 5 min</option><option value="10">Also every 10 min</option><option value="15">Also every 15 min</option></select></label>' +
       '<label>Hook text<select id="lv-hook"><option value="ai">AI writes it</option><option value="title">Stream title</option><option value="custom">My own text</option></select></label>' +
       '<label id="lv-hook-wrap" hidden>Your hook<input id="lv-hook-text" type="text" maxlength="70" placeholder="Hook text on top"></label>' +
       '<label class="check"><input id="lv-caps" type="checkbox" checked> Captions on live clips (off = faster)</label>';
@@ -237,7 +238,7 @@
     const PRE = { 10: [7, 3], 20: [12, 8], 30: [20, 10], 0: [24, 14] };
     window.__liveOpts = () => {
       const len = Number($('lv-len').value), [before, after] = PRE[len];
-      return { before, after, captions: $('lv-caps').checked, hook_mode: $('lv-hook').value, hook_text: $('lv-hook-text').value.trim() };
+        return { before, after, clip_every: Number($('lv-every').value), captions: $('lv-caps').checked, hook_mode: $('lv-hook').value, hook_text: $('lv-hook-text').value.trim() };
     };
     setInterval(async () => {
       if (typeof liveId === 'undefined' || !liveId || document.hidden) return;

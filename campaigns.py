@@ -10,6 +10,8 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
+from campaign_deals import DealCache
+
 CATALOG = Path(__file__).with_name("campaigns.json")
 TEXT_FIELDS = {"name": 64, "pays": 140, "payout": 100, "min_payout": 60, "note": 220, "action": 32}
 LOCK = Lock()
@@ -72,6 +74,7 @@ class CampaignOpen(BaseModel):
 
 def attach(app, data_dir):
     clicks = data_dir / "campaign-clicks.json"
+    deals = DealCache()
 
     def catalog():
         try:
@@ -102,3 +105,9 @@ def attach(app, data_dir):
             except OSError as exc:
                 LOG.warning("Could not save campaign click totals: %s", exc)
         return {"url": row["referral_url"]}
+
+    @app.get("/campaigns/deals")
+    def list_deals():
+        if not any(row["id"] == "contentrewards" for row in catalog()["platforms"]):
+            return {"deals": [], "checked": None}
+        return deals.get()

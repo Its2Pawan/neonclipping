@@ -88,18 +88,127 @@ document.querySelectorAll('[data-view]').forEach(button => {
 });$('refresh-library').onclick=()=>refreshLibrary().catch(e=>status(e.message));
 request('/highlights').then(showHighlights).catch(e=>status(e.message));refreshLibrary().catch(e=>status(e.message));
 
+function makeStepsMarkup(phase) {
+  const steps = [['source', 'Source'], ['analyze', 'Find moments'], ['prepare', 'Prepare captions'], ['render', 'Export']];
+  const active = phase === 'complete' ? steps.length : steps.findIndex(([key]) => key === phase);
+  if (active < 0) return '';
+  return '<ol class="make-steps" aria-label="Processing steps">' + steps.map(([, label], index) => {
+    const state = index < active ? 'done' : index === active ? 'running' : 'waiting';
+    const icon = state === 'done' ? '&#10003;' : state === 'running' ? '&#9654;' : '&#183;';
+    return '<li class="' + state + '" aria-label="' + label + ' ' + state + '"><b aria-hidden="true">' + icon + '</b>' + label + '</li>';
+  }).join('') + '</ol>';
+}
+const clipReady = clip => !clip.error && !clip.review_reason && Number(clip.viral ?? clip.score ?? 0) >= 70;
+
+async function restoreSkipped(job, index, button, message) {
+  button.disabled = true;
+  message.textContent = 'Preparing restore…';
+  try {
+    const settings = {
+      layout: makeLayout(), caption_style: style, resolution: Number($('resolution').value),
+      aspect: $('aspect').value, fps: Number($('fps').value), language: $('language').value,
+      top: Number($('top').value) / 100, cam: rect.cam, game: rect.game,
+    };
+    const result = await request('/make/' + job + '/restore/' + index, settings);
+    for (;;) {
+      const progress = await request('/make/' + result.job);
+      if (progress.status === 'done') {
+        message.textContent = 'Restored to My clips.';
+        await refreshLibrary();
+        return;
+      }
+      if (progress.status === 'error') throw Error(progress.error || 'Restore failed.');
+      message.textContent = progress.stage || 'Restoring…';
+      await sleep(1500);
+    }
+  } catch (error) {
+    message.textContent = error.message;
+    button.disabled = false;
+  }
+}
+
+function showResultsOverview(batch, job) {
+  const overview = $('make-overview');
+  const clips = (batch.clips || []).filter(clip => !clip.error);
+  const dropped = batch.dropped_frozen || [];
+  if (!clips.length && !dropped.length) return;
+  const ready = clips.filter(clipReady).length;
+  const duration = Math.max(.1, Number(batch.meta?.duration || 0), ...clips.map(clip => clip.end), ...dropped.map(clip => clip.end));
+  const seconds = Math.round(duration);
+  overview.hidden = false;
+  overview.innerHTML = '<div class="result-controls"><strong>Clips across the source</strong>' +
+    '<button type="button" class="mini-btn refine-moments">Refine search</button>' +
+    '<label>Show <select><option value="all">All (' + clips.length + ')</option><option value="ready">Ready (' + ready + ')</option><option value="review">Review (' + (clips.length - ready) + ')</option></select></label></div>' +
+    '<div class="result-source-map" aria-label="Clips on the source timeline"></div>' +
+    '<div class="result-source-labels"><span>0:00</span><span>' + Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2,'0') + '</span></div>';
+  const track = overview.querySelector('.result-source-map');
+  overview.querySelector('.refine-moments').onclick = () => {
+    const focus = $('focus-brief');
+    if (!focus) return;
+    if (focus.closest('.pane')?.hidden) document.querySelector('#adv .tab[data-key=options]')?.click();
+    const details = focus.closest('details');
+    if (details) details.open = true;
+    focus.focus();
+  };
+  for (const clip of clips) {
+    const marker = document.createElement('button');
+    marker.type = 'button';
+    marker.className = 'result-marker' + (clipReady(clip) ? ' ready' : '');
+    marker.style.left = (100 * clip.start / duration) + '%';
+    marker.style.width = Math.max(1.6, 100 * (clip.end - clip.start) / duration) + '%';
+    marker.title = clip.title;
+    marker.setAttribute('aria-label', 'See ' + clip.title);
+    marker.onclick = () => {
+      select.value = 'all';
+      filter();
+      const card = $('make-grid').querySelector('[data-file="' + CSS.escape(clip.file) + '"]');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+    track.append(marker);
+  }
+  const select = overview.querySelector('select');
+  function filter() {
+    $('make-grid').querySelectorAll('.mk').forEach(card => {
+      card.hidden = select.value !== 'all' && card.dataset.review !== select.value;
+    });
+  }
+  select.onchange = filter;
+  if (!dropped.length) return;
+  const list = document.createElement('details');
+  const title = document.createElement('summary');
+  title.textContent = 'Skipped frozen moments (' + dropped.length + ')';
+  list.append(title);
+  dropped.forEach((clip, index) => {
+    const row = document.createElement('div');
+    const label = document.createElement('span');
+    const button = document.createElement('button');
+    const message = document.createElement('small');
+    row.className = 'result-dropped';
+    label.textContent = clip.title + ' · ' + Math.round(clip.start) + '–' + Math.round(clip.end) + 's';
+    button.type = 'button';
+    button.className = 'mini-btn';
+    button.textContent = 'Restore clip';
+    button.onclick = () => restoreSkipped(job, index, button, message);
+    message.setAttribute('role', 'status');
+    row.append(label, button, message);
+    list.append(row);
+  });
+  overview.append(list);
+}
 async function showMake(resumeId){const url=$('url').value.trim();if(!resumeId&&!url&&!id){status('Paste a video link or upload a file first.');return;}
- const b=$('make');b.disabled=true;$('make-results').hidden=false;$('make-results').querySelector('.star-ask')?.remove();$('make-grid').replaceChildren();$('make-progress').style.width='2%';
+ const b=$('make');b.disabled=true;$('make-results').hidden=false;$('make-results').querySelector('.star-ask')?.remove();$('make-grid').replaceChildren();$('make-overview').hidden=true;$('make-progress').style.width='2%';$('make-steps').innerHTML=makeStepsMarkup('source');
  try{const {job}=resumeId?await request('/make/'+resumeId+'/resume',{}):await request('/make',{...(url?{url}:{id}),count:Number($('count').value),mode:$('mode').value,source_height:Number(($('srcq')||{}).value)||1080,accurate:$('accurate').value,min_len:Number($('minlen').value),max_len:Number($('length').value),layout:makeLayout(),aspect:$('aspect').value,resolution:Number($('resolution').value),fps:Number($('fps').value),cam:rect.cam,game:rect.game,top:Number($('top').value)/100,caption_style:style,language:$('language').value==='auto'?'':$('language').value});
   localStorage.setItem('neon-last-make',job);refreshResume();
   const shown=new Set();
-  for(;;){const s=await request('/make/'+job);$('make-status').textContent=(s.stage||s.status)+' · '+Math.round((s.progress||0)*100)+'%';$('make-progress').style.width=Math.max(2,(s.progress||0)*100)+'%';
-   (s.clips||[]).forEach(c=>{if(shown.has(c.file))return;shown.add(c.file);const d=document.createElement('div');d.className='mk';d.dataset.file=c.file;
-    if(c.error){d.textContent='Failed: '+c.error.slice(0,120);}else{const vid=document.createElement('video');vid.src='/media/'+c.file;vid.controls=true;vid.preload='metadata';const t=document.createElement('b');t.textContent=c.title;const m=document.createElement('small');m.textContent=Math.round(c.start)+'–'+Math.round(c.end)+'s · score '+c.score+(c.hook?' · "'+c.hook+'"':'');const a=document.createElement('a');a.href='/media/'+c.file;a.download='neonclipping-'+c.file+'.mp4';a.textContent='Download MP4';const rs=document.createElement('small');rs.textContent=c.reason||'';const vb=document.createElement('div');vb.className='viral';const ax=c.axes||{};const fmt=v=>v==null?'–':v;vb.title='Viral score is a heuristic: loudness, shouting, what is said, on-screen action and a local AI read. Your star ratings tune it.';vb.innerHTML='<b>🔥 Viral '+(c.viral??'–')+'</b><span>Energy '+fmt(ax.energy)+'</span><span>Action '+fmt(ax.action)+'</span><span>Words '+fmt(ax.words)+'</span><span>AI '+fmt(ax.ai)+'</span>';const stars=document.createElement('div');stars.className='stars';stars.title='Rate this clip: it teaches NeonClipping what a good clip is';
+  for(;;){const s=await request('/make/'+job);$('make-status').textContent=(s.stage||s.status)+' · '+Math.round((s.progress||0)*100)+'%';$('make-progress').style.width=Math.max(2,(s.progress||0)*100)+'%';$('make-steps').innerHTML=makeStepsMarkup(s.phase);
+   (s.clips||[]).forEach(c=>{if(shown.has(c.file))return;shown.add(c.file);const d=document.createElement('div');d.className='mk';d.dataset.file=c.file;d.dataset.review=clipReady(c)?'ready':'review';
+    if(c.error){d.textContent='Failed: '+c.error.slice(0,120);}else{const vid=document.createElement('video');vid.src='/media/'+c.file;vid.controls=true;vid.preload='metadata';const t=document.createElement('b');t.textContent=c.title;const m=document.createElement('small');m.textContent=Math.round(c.start)+'–'+Math.round(c.end)+'s · score '+c.score+(c.hook?' · "'+c.hook+'"':'');const a=document.createElement('a');a.href='/media/'+c.file;a.download='neonclipping-'+c.file+'.mp4';a.textContent='Download MP4';const rs=document.createElement('small');rs.textContent=[c.reason,c.review_reason].filter(Boolean).join(' · ');const vb=document.createElement('div');vb.className='viral';const ax=c.axes||{};const fmt=v=>v==null?'–':v;vb.title='Viral score is a heuristic: loudness, shouting, what is said, on-screen action and a local AI read. Your star ratings tune it.';vb.innerHTML='<b>'+(clipReady(c)?'Ready':'Review')+' · '+(c.viral??c.score??'—')+'</b>';
+    const metrics=document.createElement('div');
+    metrics.innerHTML=[['Energy',ax.energy],['Action',ax.action],['Words',ax.words],['AI',ax.ai]].map(([label,value])=>'<div class="result-metric"><b>'+label+'</b><span><i style="width:'+Math.max(0,Math.min(100,Number(value)||0))+'%"></i></span><small>'+fmt(value)+'</small></div>').join('');const stars=document.createElement('div');stars.className='stars';stars.title='Rate this clip: it teaches NeonClipping what a good clip is';
     for(let n=1;n<=5;n++){const sb=document.createElement('button');sb.textContent='★';sb.setAttribute('aria-label','Rate '+n+' star'+(n===1?'':'s'));sb.onclick=async()=>{try{const r=await request('/feedback',{file:c.file,rating:n});[...stars.children].forEach((x,i)=>x.classList.toggle('on',i<n));fb.textContent=ratingMessage(r);}catch(e){fb.textContent=e.message;}};stars.append(sb);}
-    const fb=document.createElement('small');fb.className='fb';fb.textContent='Rate this clip ↑';const edit=document.createElement('button');edit.textContent='Edit clip';edit.onclick=()=>openSavedClip(d.dataset.file).catch(e=>status(e.message));d.append(vid,t,vb,m,rs,a,edit,campaignButton(s.game,c.hashtags),stars,fb);}
+    const fb=document.createElement('small');fb.className='fb';fb.textContent='Rate this clip ↑';const edit=document.createElement('button');edit.textContent='Edit clip';edit.onclick=()=>openSavedClip(d.dataset.file).catch(e=>status(e.message));d.append(vid,t,vb,metrics,m,rs,a,edit,campaignButton(s.game,c.hashtags),stars,fb);}
     appendVisualReview(d,c.visual_review);$('make-grid').append(d);});
-   if(s.status==='error')throw Error(s.error);if(s.status==='done'){if(!(s.clips||[]).length){$('make-status').textContent=s.stage||'No moments matched. Broaden your filters and try again.';break;}$('make-status').textContent='Done · '+(s.clips||[]).length+' clips in '+s.elapsed_seconds+'s · also in My clips ('+(s.engine||'')+')';if(!$('make-results').querySelector('.star-ask')){const q=document.createElement('div');q.className='star-ask';q.innerHTML='Free and open-source. If these clips saved you time, <a href="https://github.com/iamajmeena/neonclipping" target="_blank" rel="noopener">★ star NeonClipping on GitHub</a> and follow <a href="https://www.instagram.com/iamajmeena/" target="_blank" rel="noopener">@iamajmeena</a> for more tools.';$('make-results').append(q);}break;}
+   if(s.status==='error')throw Error(s.error);if(s.status==='done'){showResultsOverview(s,job);if(!(s.clips||[]).length){$('make-status').textContent=s.stage||'No moments matched. Broaden your filters and try again.';break;}$('make-status').textContent='Done · '+(s.clips||[]).length+' clips in '+s.elapsed_seconds+'s · also in My clips ('+(s.engine||'')+')';if(!$('make-results').querySelector('.star-ask')){const q=document.createElement('div');q.className='star-ask';q.innerHTML='Free and open-source. If these clips saved you time, <a href="https://github.com/iamajmeena/neonclipping" target="_blank" rel="noopener">★ star NeonClipping on GitHub</a> and follow <a href="https://www.instagram.com/iamajmeena/" target="_blank" rel="noopener">@iamajmeena</a> for more tools.';$('make-results').append(q);}break;}
    await sleep(1000);}}catch(e){$('make-status').textContent=e.message;}finally{b.disabled=false;refreshResume();}}
 $('make').onclick=()=>showMake(null);
 async function refreshResume(){const job=localStorage.getItem('neon-last-make');const button=$('resume-make');button.hidden=true;if(!job)return;try{const row=await request('/make/'+job);button.hidden=!row.can_resume;button.onclick=()=>showMake(job);}catch{}}
@@ -198,7 +307,7 @@ function liveCard(c){const d=document.createElement('div');d.className='mk';d.da
 function liveStatus(s){const mm=String(Math.floor((s.elapsed||0)/60)).padStart(2,'0')+':'+String((s.elapsed||0)%60).padStart(2,'0');
  if(s.status==='error')return '⚠ '+(s.error||'Could not start');
  if(s.status==='starting')return s.stage;
- if(s.status==='recording')return '● Recording '+mm+' · chat '+s.chat_now+' msgs/10 s (normal '+s.baseline+') · chat '+s.chat+' · spikes '+s.spikes+' · clips '+s.clips.length+(s.pending?' · cutting '+s.pending+'…':'');
+ if(s.status==='recording')return '● Recording '+mm+' · chat '+s.chat_now+' msgs/10 s (normal '+s.baseline+')'+(s.chat_unique?' · '+s.chat_unique+' chatters/30 s':'')+' · chat '+s.chat+' · spikes '+s.spikes+' · clips '+s.clips.length+(s.pending?' · cutting '+s.pending+'…':'');
  return s.stage+' · clips '+s.clips.length;}
 async function livePoll(){if(!liveId)return;try{const s=await request('/live/'+liveId);$('live-stats').textContent=liveStatus(s);
  s.clips.forEach((c,i)=>{if(liveShown.has(i))return;liveShown.add(i);$('live-grid').prepend(liveCard(c));});
@@ -254,6 +363,18 @@ async function loadCreators(force){
   const mk=(txt,fn)=>{const b=document.createElement('button');b.className='secondary';b.textContent=txt;b.onclick=()=>fn(b).catch(e=>{$('creator-note').textContent='⚠ '+e.message;});acts.append(b);return b;};
   mk('Check now',async b=>{b.disabled=true;$('creator-note').textContent='Checking '+c.name+'…';const x=await request('/creators/'+c.id+'/check',{});$('creator-note').textContent=c.name+(x.live?' is live right now.':' is not live right now.');await loadCreators(true);});
   mk('Use my current layout',async()=>{await request('/creators/'+c.id+'/layout',creatorOpts());$('creator-note').textContent='Saved your current layout, facecam boxes and caption style for '+c.name+'.';});
+  const cadence=document.createElement('select');
+  cadence.setAttribute('aria-label','Automatic clip interval for '+c.name);
+  [[0,'Chat spikes only'],[2,'Also every 2 min'],[5,'Also every 5 min'],[10,'Also every 10 min'],[15,'Also every 15 min']].forEach(([value,label])=>{
+    const option=document.createElement('option');option.value=value;option.textContent=label;cadence.append(option);
+  });
+  const savedCadence=String(c.opts?.clip_every||0);
+  cadence.value=savedCadence;
+  cadence.onchange=async()=>{
+    try {await request('/creators/'+c.id+'/layout',{clip_every:Number(cadence.value)});$('creator-note').textContent='Clip interval saved for the next live session.';await loadCreators(true);}
+    catch(error){cadence.value=savedCadence;$('creator-note').textContent=error.message;}
+  };
+  acts.append(cadence);
   if(c.session)mk('Open live view',async()=>{showLiveControls();attachLive(c.session);$('live-box').scrollIntoView({behavior:'smooth'});});
   mk('Remove',async()=>{if(!confirm('Remove '+c.name+' from your list? Their clips stay in My clips.'))return;await request('/creators/'+c.id+'/remove',{});document.dispatchEvent(new Event('creator-watchlist-change'));await loadCreators(true);});
   const det=document.createElement('details');det.className='creator-feed';const sm=document.createElement('summary');sm.textContent='Clips from '+c.name+' ('+c.clips+')';const grid=document.createElement('div');grid.className='make-grid';

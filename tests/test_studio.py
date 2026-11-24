@@ -38,6 +38,10 @@ class LocalStudio(unittest.TestCase):
 
 
 class NativePosting(unittest.TestCase):
+    def test_queue_window_observes_daily_cap_and_spacing(self):
+        self.assertEqual(120, social.pick_post_slot(60,[60],1,0,0))
+        self.assertEqual(86400, social.pick_post_slot(120,[60],0,1,0))
+        self.assertEqual(86400-19800, social.pick_post_slot(120,[60],0,1,330))
     def test_oauth_callback_bound_to_original_request_and_one_use(self):
         with patch.dict("os.environ",{"NEONCLIPPING_YOUTUBE_CLIENT_ID":"test-id","NEONCLIPPING_YOUTUBE_TOKEN":""}),patch.object(social_accounts,"vault") as vault,patch.object(social_accounts,"exchange",return_value={"access_token":"fixture"}) as exchange:
             url=social_accounts.begin("youtube")["url"]
@@ -102,5 +106,15 @@ class NativePosting(unittest.TestCase):
                     self.assertEqual(len(client.get("/queue").json()["jobs"]),1)
                     client.post("/queue/"+result[0]["job"]+"/cancel",json={}).raise_for_status()
                     self.assertEqual(client.get("/social/posts").json()[0]["status"],"canceled")
+                    test_draft={**body,"request_id":str(uuid.uuid4()),"draft":True,"gap_minutes":10,"daily_cap":3}
+                    saved=client.post("/social/posts",json=test_draft)
+                    self.assertEqual(saved.status_code,200)
+                    post_id=saved.json()["post"]
+                    self.assertEqual(client.get("/social/posts").json()[0]["status"],"draft")
+                    self.assertEqual(len(client.get("/queue").json()["jobs"]),1)
+                    self.assertEqual(client.post(f"/social/posts/{post_id}/approve",json={}).status_code,200)
+                    self.assertEqual(client.get("/social/posts").json()[0]["status"],"queued")
+                    self.assertEqual(client.post(f"/social/posts/{post_id}/approve",json={}).status_code,409)
+                    post.assert_not_called()
                     post.assert_not_called()
             finally:app.processing_queue.close()

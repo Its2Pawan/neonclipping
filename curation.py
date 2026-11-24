@@ -35,14 +35,24 @@ def filler(text):
 
 def extract_hook(text):
     """Use a real payoff sentence when a small model cannot support its proposed hook."""
+    chatter=r"(?:ar+e+|arey+|arre+|abe+|uh+|um+|hmm+|oh+|yo+|hey+)"
+    text=re.sub(r"(?<!\w)"+chatter+r"(?:[\s,]+(?:"+chatter+r"))+(?!\w)"," ",text,flags=re.I)
+    text=re.sub(r"^[\s,]+|[\s,]+$","",text)
     sentences=[part.strip() for part in re.split(r'[.!?।\n]+',text) if len(part.split())>=3]
     if not sentences:return ' '.join(text.split()[:9])[:80]
     def merit(sentence):
         tokens=sentence.casefold()
         cues=('but','instead','wrong','stuck','finally','silence','impact','whole time','mistake','lekin','isliye','galti','actually','police','car','gaadi','keys')
-        return sum(2 if cue in ('stuck','whole time','silence','impact','lekin','isliye') else 1 for cue in cues if cue in tokens)-max(0,len(sentence.split())-12)*.05
+        words=re.findall(r"\w+",tokens)
+        cue_score=sum(2 if cue in ('stuck','whole time','silence','impact','lekin','isliye') else 1
+                      for cue in cues if re.search(r"(?<!\w)"+re.escape(cue)+r"(?!\w)",tokens))
+        return cue_score - .8*len(re.findall(r"(?<!\w)"+chatter+r"(?!\w)",tokens)) - .25*(len(words)-len(set(words))) - max(0,len(words)-12)*.05
     line=max(sentences,key=merit);tokens=line.split()
-    tokens=tokens if len(tokens)<=9 else tokens[-9:]
+    if len(tokens)>9:
+        detail=r"(?i)\b(but|instead|actually|lekin|isliye|galti|police|gaadi|keys|stuck)\b"
+        center=next((index for index,word in enumerate(tokens) if re.search(detail,word)),2)
+        start=max(0,min(center-2,len(tokens)-9))
+        tokens=tokens[start:start+9]
     hook=' '.join(tokens)
     if len(tokens)<=6 and not hook.endswith(('?','!')):
         hook=('Wait for it: ','This is the part: ','Listen to this: ')[sum(map(ord,hook))%3]+hook

@@ -4,6 +4,13 @@ from unittest.mock import patch
 from fastapi import FastAPI,HTTPException
 import vision
 class VisualReview(unittest.TestCase):
+    def test_one_frame_check_keeps_only_visible_supported_classes(self):
+        response=io.BytesIO(json.dumps({'response':'{"facecam":"yes","reaction":"laugh"}'}).encode())
+        with patch('vision.subprocess.check_output',return_value=b'jpeg') as image, \
+             patch('vision.urllib.request.urlopen',return_value=response):
+            result=vision.inspect_facecam('source.mp4',2,{'x':.1,'y':.1,'w':.2,'h':.3},'gemma4:test',True)
+        image.assert_called_once()
+        self.assertEqual({'facecam':'yes','reaction':'laugh'},result)
     def test_structured_model_output_is_readable_text(self):
         self.assertEqual(vision.clean_description('{"description":"A plane is visible."}'),'A plane is visible.')
     def test_unsupported_vision_only_model_is_not_advertised(self):

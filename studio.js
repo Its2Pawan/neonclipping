@@ -156,8 +156,22 @@
   const note=t=>{get('note').textContent=t;};
   async function history(){
     const host=get('history');host.replaceChildren();
-    for(const row of await request('/social/posts')){
+    const rows=await request('/social/posts');
+    const today=new Date().toDateString(),todayAt=t=>t&&new Date(t*1000).toDateString()===today;
+    get('summary').textContent=rows.filter(row=>row.status==='submitted'&&todayAt(row.submitted_at)).length+' submitted today · '+
+      rows.filter(row=>['queued','running'].includes(row.status)&&todayAt(row.scheduled_at)).length+' queued today';
+    for(const row of rows){
       const line=document.createElement('p');line.textContent=row.platform+' · '+row.title+' · '+row.status+(row.error?' · '+row.error:'');
+      if(['draft','retryable'].includes(row.status)){
+        const review=document.createElement('small');review.textContent=' · '+row.name+' · '+row.privacy;
+        if(row.when)review.textContent+=' · '+new Date(row.when*1000).toLocaleString();
+        const approve=document.createElement('button');approve.textContent=row.status==='retryable'?'Retry and queue':'Approve and queue';
+        approve.onclick=async()=>{approve.disabled=true;try{
+          const result=await request('/social/posts/'+row.id+'/approve',{});
+          note('Approved for '+new Date(result.scheduled_at*1000).toLocaleString()+'.');await history();
+        }catch(e){note(e.message);approve.disabled=false;}};
+        line.append(review,approve);
+      }
       if(row.status==='queued' && row.job){const cancel=document.createElement('button');cancel.textContent='Cancel scheduled post';
         cancel.onclick=async()=>{try{await request('/queue/'+row.job+'/cancel',{});await history();}catch(e){note(e.message);}};line.append(cancel);}
       if(row.external){const metrics=document.createElement('span');const show=v=>{metrics.textContent=Object.entries(v).map(([k,n])=>' · '+k+' '+n).join('');};
@@ -187,9 +201,10 @@
   get('send').onclick=async()=>{if(!account)return;get('send').disabled=true;
     try{const date=get('when').value;const payload={account:account.id,platform:get('platform').value,privacy:get('privacy').value,
       clip:get('clip').value,title:get('title').value,media_url:get('url').value,when:date?new Date(date).getTime()/1000:0,
-      own_brand:get('brand').checked,paid:get('paid').checked};
+      own_brand:get('brand').checked,paid:get('paid').checked,draft:true,
+      gap_minutes:Number(get('gap').value)||0,daily_cap:Number(get('cap').value)||0,offset_minutes:-new Date().getTimezoneOffset()};
       const signature=JSON.stringify(payload);
       if(!pending || pending.signature!==signature)pending={signature,id:crypto.randomUUID()};
-      await request('/social/posts',{...payload,request_id:pending.id});note('Saved in the processing queue.');await history();
+      await request('/social/posts',{...payload,request_id:pending.id});pending=null;note('Draft saved. Approve it below to queue publishing.');await history();
     }catch(e){note(e.message);}finally{get('send').disabled=!account;}};
 })();

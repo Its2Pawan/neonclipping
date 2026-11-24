@@ -22,6 +22,8 @@ CATALOG = [
     ('caption_fix', 'AI spelling fix', 'The AI fixes numbers, names and spellings in captions, word by word.', 'medium', ('balanced', 'deep')),
     ('whole_pass', 'AI reads everything', 'The AI reads the whole talk, so quiet funny lines are not missed.', 'medium', ('balanced', 'deep')),
     ('fair_order', 'Fair comparing', 'The comparison is done twice in opposite order, so no clip loses for being last.', 'heavy', ('deep',)),
+    ('facecam_check', 'Verify facecam', 'Checks a single facecam crop with a local Gemma vision model, when installed.', 'medium', ()),
+    ('face_reaction', 'Facecam reactions', 'Optional Best-mode cue from a visible laugh or surprise in one frame.', 'heavy', ()),
     ('deep_scan', 'Full video scan', 'Downloads the whole video and scans every frame for movement (slow, most thorough).', 'heavy', ('deep',)),
 ]
 KEYS = [row[0] for row in CATALOG]

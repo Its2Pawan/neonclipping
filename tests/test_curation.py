@@ -14,6 +14,11 @@ class Curation(unittest.TestCase):
         words=[{'start':i,'end':i+.7,'text':('actually' if i%37==0 else 'story')} for i in range(300)]
         candidates=curation.transcript_candidates(words,300,30,5)
         self.assertEqual(len(candidates),5);self.assertGreater(candidates[-1]['start'],200)
+    def test_fallback_hook_skips_repeated_interjections_and_keeps_payoff(self):
+        transcript='Liye bina matlab ka arre arre arre. Gaadi police ke saamne ruk gayi.'
+        hook=curation.extract_hook(transcript)
+        self.assertIn('Gaadi police ke saamne ruk gayi',hook)
+        self.assertNotIn('arre',hook.casefold())
     def test_repeat_story_and_time_overlap_do_not_dominate(self):
         candidates=[{'start':0,'end':30,'rank':.9,'kind':'action','transcript':'police chase car crash'}, {'start':5,'end':35,'rank':.89,'kind':'action','transcript':'police chase car crash'}, {'start':40,'end':70,'rank':.88,'kind':'action','transcript':'police chase car crash'}, {'start':80,'end':110,'rank':.85,'kind':'humour','transcript':'my friend forgot the keys'}]
         chosen=curation.select(candidates,2)

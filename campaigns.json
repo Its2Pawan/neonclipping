@@ -11,6 +11,17 @@
       "good_for": ["GTA", "Streams", "Podcasts"]
     },
     {
+      "id": "clipster",
+      "name": "Clipster",
+      "referral_url": "https://clipster.com/r/iamajmeena",
+      "action": "Join Clipster",
+      "pays": "Per approved view or per post, depending on the brief",
+      "payout": "INR bank transfer (IMPS)",
+      "india": "Yes",
+      "min_payout": "$50 balance",
+      "good_for": ["UGC", "Music"]
+    },
+    {
       "id": "100x-clipping",
       "name": "100x Clipping",
       "referral_url": "https://whop.com/nova-corp-c696/nova-model-influencer-promo?a=rockstaraj",

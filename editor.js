@@ -41,10 +41,17 @@
   const SIZES = [['S', 44], ['M', 58], ['L', 74], ['XL', 92]];
   const LOOKS = [['Normal', 0, 1, 1, 0], ['Vivid', .02, 1.15, 1.35, .3], ['Bright', .1, 1.05, 1.1, .1], ['Moody', -.08, 1.2, .85, .2], ['Sharp', 0, 1.1, 1, .9]];
   const VOLUMES = [['Mute', 0], ['50%', .5], ['100%', 1], ['150%', 1.5]];
+  const CAPTION_BRAND_KEYS = ['caption_font', 'caption_size', 'caption_color', 'caption_active', 'caption_outline', 'caption_max_words'];
+  const RECIPES = {
+    gaming: { label: 'Gaming neon', caption_style: 'gta', caption_max_words: 3, hook_style: 'neon' },
+    dialogue: { label: 'Clean dialogue', caption_style: 'clean', caption_max_words: 5, hook_style: 'box' },
+    reaction: { label: 'Big reaction', caption_style: 'bold', caption_max_words: 2, hook_style: 'impact' },
+  };
 
   // ---------- state: everything editable lives in `st`, so undo/redo is a snapshot
   let sortBest = false, clips = [], file = '', info = null, st = null, original = null, undo = [], redo = [], tab = 'captions';
   let vt = 0, playing = false, curPiece = 0, token = 0, sel = 0;
+  let captionProfiles = {}, profilesReady = false;
   const thumbs = new Map();
   const snap = () => JSON.stringify(st);
   const dirty = () => original !== null && snap() !== original;
@@ -63,7 +70,7 @@
   const length = () => plen(st.pieces);
   function rel(ps) {
     const out = []; let off = 0;
-    ps.forEach(p => { st.words.forEach((w, i) => { if (w.b > p.start && w.a < p.end) out.push({ i, start: off + Math.max(w.a, p.start) - p.start, end: off + Math.min(w.b, p.end) - p.start, text: w.text }); }); off += p.end - p.start; });
+    ps.forEach((p, piece) => { st.words.forEach((w, i) => { if (w.b > p.start && w.a < p.end) out.push({ i, piece, start: off + Math.max(w.a, p.start) - p.start, end: off + Math.min(w.b, p.end) - p.start, text: w.text }); }); off += p.end - p.start; });
     return out.sort((a, b) => a.start - b.start);
   }
   function locate(t) {
@@ -79,16 +86,17 @@
   function build() {
     const sec = document.createElement('section');
     sec.id = 'clip-editor-view'; sec.hidden = true;
-    sec.innerHTML = '<section class="library-heading"><h2>Editor, <em>polish every clip.</em></h2><span class="ed-note" id="ed-note" role="status"></span></section>' +
+    sec.innerHTML = '<section class="library-heading"><h2>Clip editor</h2><span class="ed-note" id="ed-note" role="status"></span></section>' +
       '<div class="ed-grid"><aside class="ed-list panel"><button type="button" class="mini-btn" id="ed-sort">Sort: newest</button><div id="ed-list"></div></aside>' +
       '<div class="ed-center panel"><div class="ed-stage" id="ed-stage"><canvas id="ed-canvas" width="540" height="960"></canvas><div class="ed-safe" id="ed-safe" hidden></div><div class="ed-cap" id="ed-cap" title="Drag up or down to move the captions"></div></div>' +
       '<div class="ed-bar"><button class="mini-btn primary" id="ed-play" aria-label="Play or pause">▶</button><span id="ed-clock" class="muted">0:00.0 / 0:00.0</span><button class="mini-btn" id="ed-undo" disabled>↶</button><button class="mini-btn" id="ed-redo" disabled>↷</button>' +
       '<label class="ed-chk"><input type="checkbox" id="ed-safe-on"> Safe area</label></div></div>' +
       '<div class="ed-side panel"><div class="ed-tabs" id="ed-tabs"></div><div class="ed-pane" id="ed-pane"></div>' +
       '<div class="ed-export"><label class="ed-chk"><input type="radio" name="ed-scope" value="one" checked> Only this clip</label><label class="ed-chk"><input type="radio" name="ed-scope" value="video"> All clips of this video <small id="ed-count"></small></label>' +
-      '<button class="mini-btn primary" id="ed-export" disabled>Export changes</button><button class="mini-btn" id="ed-reset" disabled>Reset</button></div></div></div>' +
+      '<button class="mini-btn primary" id="ed-export" disabled>Export changes</button><button class="mini-btn" id="ed-reset" disabled>Reset</button><button class="mini-btn" id="ed-export-tracks" hidden>Download editing tracks</button><button class="mini-btn" id="ed-reaction-gif" disabled>Reaction GIF</button></div></div></div>' +
       '<div class="panel ed-tl"><div class="ed-tools"><button type="button" class="mini-btn" id="ed-split">✂ Split</button><button type="button" class="mini-btn" data-pa="dup">⧉ Duplicate</button><button type="button" class="mini-btn" data-pa="left">◀</button><button type="button" class="mini-btn" data-pa="right">▶</button><button type="button" class="mini-btn warn" data-pa="drop">🗑 Remove</button><span class="muted" id="ed-tl-note"></span></div>' +
-      '<div class="ed-lane" id="ed-lane"></div><div class="ed-lane ed-capl" id="ed-capl"></div></div>' +
+      '<div class="ed-tools ed-timing-tools"><label class="ed-chk"><input type="checkbox" id="ed-snap" checked> Snap to words</label><button type="button" id="ed-in" class="mini-btn">Set in</button><button type="button" id="ed-out" class="mini-btn">Set out</button></div>' +
+      '<div class="ed-track"><span>Clip</span><div class="ed-lane" id="ed-lane"></div></div><div class="ed-track"><span>Words</span><div class="ed-lane ed-capl" id="ed-capl"></div></div></div>' +
       '<div class="panel ed-words"><h3>Transcript</h3><div id="ed-fixask" class="ed-fixask" hidden></div><div id="ed-words" class="ed-wordlist"></div>' +
       '<div class="ed-gloss"><div class="ed-gloss-head"><b>Your words</b><small>Fixed once, spelled right in every new clip</small></div><div id="ed-gloss" class="ed-gloss-list"></div>' +
       '<div class="ed-gloss-add"><input id="ed-gl-from" placeholder="Written as (pulis)" maxlength="60"><span>→</span><input id="ed-gl-to" placeholder="Should be (police)" maxlength="60"><button type="button" class="mini-btn" id="ed-gl-add">Add</button></div></div></div>' +
@@ -100,9 +108,29 @@
     $('ed-undo').onclick = () => jump(undo, redo); $('ed-redo').onclick = () => jump(redo, undo);
     $('ed-reset').onclick = () => commit(() => { st = JSON.parse(original); });
     $('ed-safe-on').onchange = e => { $('ed-safe').hidden = !e.target.checked; };
-    $('ed-export').onclick = exportNow; $('ed-play').onclick = togglePlay;
+    $('ed-export').onclick = exportNow; $('ed-export-tracks').onclick = exportTracks; $('ed-play').onclick = togglePlay;
+    $('ed-reaction-gif').onclick = async () => {
+      if (!file) return;
+      if (dirty()) { note('Export your changes first to include them in the GIF.'); return; }
+      const button = $('ed-reaction-gif');
+      button.disabled = true;
+      try {
+        const response = await fetch('/reaction-gif/' + encodeURIComponent(file) + '?at=' + vt.toFixed(3));
+        if (!response.ok) throw new Error('Could not make the reaction GIF.');
+        const objectUrl = URL.createObjectURL(await response.blob());
+        const download = document.createElement('a');
+        download.href = objectUrl; download.download = 'NeonClipping-reaction.gif'; download.click();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 2000);
+      } catch (error) {
+        note(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    };
     $('ed-list').onclick = e => { const c = e.target.closest('[data-clip]'); if (c) openClip(c.dataset.clip); };
     $('ed-split').onclick = splitHere;
+    $('ed-in').onclick = () => setPieceBoundary('start');
+    $('ed-out').onclick = () => setPieceBoundary('end');
     sec.addEventListener('click', onClick); sec.addEventListener('change', onChange); drawGloss();
     document.addEventListener('keydown', e => {
       if (sec.hidden || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName || '') || e.target.isContentEditable) return;
@@ -139,10 +167,16 @@
       hook: s.hook || '', hook_enabled: s.hook_enabled !== false, hook_style: s.hook_style || 'impact', fade_inout: !!s.fade_inout, top: Number(s.top || 0.32),
       cam: s.cam || { x: 0, y: 0, w: .3, h: .3 }, game: s.game || { x: 0, y: 0, w: 1, h: 1 },
       cam_brightness: s.cam_brightness == null ? 0 : s.cam_brightness, cam_contrast: s.cam_contrast == null ? 1 : s.cam_contrast, cam_saturation: s.cam_saturation == null ? 1 : s.cam_saturation, cam_clarity: s.cam_clarity == null ? 0 : s.cam_clarity,
+      censor_mode: s.censor_mode || 'off', censor_words: s.censor_words || '', clip_progress: s.clip_progress === true, loop_end: s.loop_end === true,
+      effect_cues: (s.effect_cues || []).map(cue => ({ ...cue })),
       pieces: (s.segments && s.segments.length ? s.segments : [{ start: Number(s.start || 0), end: Number(s.end || 0) }]).map(p => ({ start: Number(p.start), end: Number(p.end) })), words: [], base: base.duration || 0,
     };
     const seen = new Set();
     (s.words || []).forEach(w => { let off = 0; for (const p of st.pieces) { const l = p.end - p.start; if (w.start < off + l) { const a = p.start + (w.start - off), b = p.start + (Math.min(w.end, off + l) - off), k = a.toFixed(2) + w.text; if (!seen.has(k)) { seen.add(k); st.words.push({ a, b, text: w.text }); } break; } off += l; } });
+    for (const word of s.context_words || []) {
+      if (st.pieces.some(piece => word.start < piece.end && word.end > piece.start)) continue;
+      st.words.push({ a: word.start, b: word.end, text: word.text });
+    }
     original = snap(); undo = []; redo = []; sel = 0;
     try { const d = localStorage.getItem(draftKey()); if (d) { const dd = JSON.parse(d); if (dd && Array.isArray(dd.pieces) && dd.cam && confirm('Restore your unsaved changes for this clip?')) { st = dd; } else if (!dd || !Array.isArray(dd.pieces) || !dd.cam) localStorage.removeItem(draftKey()); } } catch (e) { /* ignore */ }
     const v = $('ed-src'); v.src = '/media/' + base.id; v.muted = false;
@@ -216,16 +250,37 @@
     stage.addEventListener('pointerup', end); stage.addEventListener('pointercancel', end);
   }
 
-  // ---------- timeline: one lane of pieces with filmstrips; drag the playhead, drag a piece edge to trim, click a piece to select
+  // ---------- timeline: source context stays visible beside the edit
+  function context() {
+    const first = st.pieces[0], last = st.pieces.at(-1);
+    return { lead: Math.min(15, first.start), trail: Math.min(15, Math.max(0, st.base - last.end)) };
+  }
+  function syncContext() {
+    const { lead, trail } = context();
+    for (const [id, seconds] of [['ed-source-lead', lead], ['ed-source-trail', trail]]) {
+      const item = $(id);
+      item.hidden = seconds < 0.05;
+      item.style.flex = seconds + ' 1 0';
+      item.textContent = seconds.toFixed(1) + 's';
+    }
+    return { lead, span: length() + lead + trail };
+  }
   function drawTimeline() {
     const lane = $('ed-lane'); if (!st) { lane.innerHTML = ''; return; }
     sel = clamp(sel, 0, st.pieces.length - 1); const total = length();
-    lane.innerHTML = st.pieces.map((p, i) => '<div class="ed-piece' + (i === sel ? ' on' : '') + '" data-p="' + i + '" style="flex:' + (p.end - p.start) + ' 1 0"><div class="ed-film"></div><i class="ed-h l" data-h="' + i + ':start"></i><i class="ed-h r" data-h="' + i + ':end"></i><b>' + (p.end - p.start).toFixed(1) + 's</b></div>').join('') + '<div class="ed-ph" id="ed-ph"></div>';
-    const r = rel(st.pieces); $('ed-capl').innerHTML = r.map(w => '<span style="left:' + (100 * w.start / total) + '%;width:' + Math.max(0.4, 100 * (w.end - w.start) / total) + '%" title="' + esc(w.text) + '">' + esc(w.text) + '</span>').join('');
+    const grey = (id, label) => '<div class="ed-context" id="' + id + '" title="' + label + '"></div>';
+    lane.innerHTML = grey('ed-source-lead', 'Available source before the clip') + st.pieces.map((p, i) => '<div class="ed-piece' + (i === sel ? ' on' : '') + '" data-p="' + i + '" style="flex:' + (p.end - p.start) + ' 1 0"><div class="ed-film"></div><i class="ed-h l" data-h="' + i + ':start"></i><i class="ed-h r" data-h="' + i + ':end"></i><b>' + (p.end - p.start).toFixed(1) + 's</b></div>').join('') + grey('ed-source-trail', 'Available source after the clip') + '<div class="ed-ph" id="ed-ph"></div>';
+    const { lead, span } = syncContext();
+    const r = rel(st.pieces); $('ed-capl').innerHTML = r.map(w => '<span style="left:' + (100 * (lead + w.start) / span) + '%;width:' + Math.max(0.4, 100 * (w.end - w.start) / span) + '%" title="' + esc(w.text) + '">' + esc(w.text) + '</span>').join('');
     $('ed-tl-note').textContent = st.pieces.length + ' piece' + (st.pieces.length > 1 ? 's' : '') + ' · ' + total.toFixed(1) + ' s' + (fits(st.pieces, true) ? '' : ' ⚠ length');
     markPlayhead(); fillFilm();
   }
-  function markPlayhead() { const ph = $('ed-ph'); if (ph && st) ph.style.left = (100 * vt / Math.max(0.01, length())) + '%'; const c = $('ed-clock'); if (c && st) c.textContent = fmt(vt) + ' / ' + fmt(length()); }
+  function markPlayhead() {
+    if (!st) return;
+    const { lead, trail } = context(), ph = $('ed-ph');
+    if (ph) ph.style.left = (100 * (lead + vt) / Math.max(0.01, length() + lead + trail)) + '%';
+    $('ed-clock').textContent = fmt(vt) + ' / ' + fmt(length());
+  }
   async function fillFilm() {
     const me = ++token, films = [...document.querySelectorAll('#ed-lane .ed-film')], jobs = [], base = info.origin || info.source;
     films.forEach((f, i) => { const w = f.getBoundingClientRect().width || 120, n = Math.max(1, Math.round(w / 96)), p = st.pieces[i]; for (let k = 0; k < n; k++) { const s = document.createElement('span'); f.append(s); jobs.push([s, p.start + (k + .5) / n * (p.end - p.start)]); } });
@@ -251,24 +306,55 @@
     if (!(l.src > p.start + 0.1 && l.src < p.end - 0.1)) { note('Move the playhead inside a piece first.'); return; }
     commit(() => { st.pieces.splice(l.i, 1, { start: p.start, end: l.src }, { start: l.src, end: p.end }); sel = l.i + 1; });
   }
+  function snapTime(value, type) {
+    if (!$('ed-snap').checked) return value;
+    let closest = value, distance = 0.16;
+    for (const word of st.words) {
+      const edge = type === 'start' ? word.a : word.b;
+      const delta = Math.abs(value - edge);
+      if (delta < distance) { closest = edge; distance = delta; }
+    }
+    return closest;
+  }
+  function setPieceBoundary(edge) {
+    if (!st) return;
+    const current = locate(vt);
+    const next = st.pieces.map(piece => ({ ...piece }));
+    next[current.i][edge] = snapTime(current.src, edge);
+    if (!fits(next, false)) return;
+    if (playing) togglePlay();
+    commit(() => { st.pieces = next; sel = current.i; vt = Math.min(vt, length()); });
+    seekTo(vt);
+  }
   function wireLane() {
     const lane = $('ed-lane'); let mode = null;
-    const xToVt = e => { const b = lane.getBoundingClientRect(); return clamp((e.clientX - b.left) / b.width, 0, 1) * length(); };
+    const xToVt = e => {
+      const b = lane.getBoundingClientRect(), { lead, trail } = context();
+      return clamp((e.clientX - b.left) / b.width * (length() + lead + trail) - lead, 0, length());
+    };
     lane.addEventListener('pointerdown', e => {
       if (!st) return; lane.setPointerCapture(e.pointerId);
       const h = e.target.closest('[data-h]');
-      if (h) { const [i, edge] = h.dataset.h.split(':'); mode = { kind: 'trim', i: Number(i), edge, x: e.clientX, p0: { ...st.pieces[Number(i)] } }; dragStart(); return; }
+      if (h) {
+        if (playing) togglePlay();
+        const [i, edge] = h.dataset.h.split(':'), { lead, trail } = context();
+        mode = { kind: 'trim', i: Number(i), edge, x: e.clientX, p0: { ...st.pieces[Number(i)] },
+          rate: (length() + lead + trail) / lane.getBoundingClientRect().width };
+        dragStart(); return;
+      }
       const pc = e.target.closest('[data-p]'); if (pc) sel = Number(pc.dataset.p);
       mode = { kind: 'scrub' }; seekTo(xToVt(e)); lane.querySelectorAll('.ed-piece').forEach((n, i) => n.classList.toggle('on', i === sel));
     });
     lane.addEventListener('pointermove', e => {
       if (!mode) return;
       if (mode.kind === 'scrub') { seekTo(xToVt(e)); return; }
-      const b = lane.getBoundingClientRect(), dt = (e.clientX - mode.x) / b.width * length(), p = st.pieces[mode.i];
-      if (mode.edge === 'start') p.start = clamp(mode.p0.start + dt, 0, p.end - 0.2); else p.end = clamp(mode.p0.end + dt, p.start + 0.2, st.base);
+      const dt = (e.clientX - mode.x) * mode.rate, p = st.pieces[mode.i];
+      const time = snapTime(mode.p0[mode.edge] + dt, mode.edge);
+      if (mode.edge === 'start') p.start = clamp(time, 0, p.end - 0.2); else p.end = clamp(time, p.start + 0.2, st.base);
       const el = lane.querySelectorAll('.ed-piece')[mode.i]; if (el) { el.style.flex = (p.end - p.start) + ' 1 0'; el.querySelector('b').textContent = (p.end - p.start).toFixed(1) + 's'; }
+      syncContext();
     });
-    const end = () => { if (!mode) return; const m = mode; mode = null; if (m.kind === 'trim') { if (!fits(st.pieces, false)) { st.pieces[m.i] = m.p0; dragSnap = null; afterChange(); return; } note(''); dragEnd(); } };
+    const end = () => { if (!mode) return; const m = mode; mode = null; if (m.kind === 'trim') { if (!fits(st.pieces, false)) { st.pieces[m.i] = m.p0; dragSnap = null; afterChange(); return; } note(''); dragEnd(); seekTo(vt); } };
     lane.addEventListener('pointerup', end); lane.addEventListener('pointercancel', end);
   }
   function pieceAction(act) {
@@ -298,6 +384,9 @@
         '<h4>Words per line</h4><div class="ed-row">' + [1, 2, 3, 4, 5, 6].map(n => chip('data-words="' + n + '"', n, Number(st.caption_max_words) === n)).join('') + '</div>' +
         '<h4>Font</h4><div class="ed-row">' + chip('data-font=""', 'Auto', !st.caption_font) + FONTS.map(f => '<button type="button" class="ed-chip' + (st.caption_font === f ? ' on' : '') + '" data-font="' + f + '" style="font-family:\'' + f + '\'">Aa</button>').join('') + '</div>' +
         '<h4>Text colour</h4>' + swatches('caption_color') + '<h4>Active word</h4>' + swatches('caption_active') + '<h4>Outline</h4>' + swatches('caption_outline') +
+        '<h4>Caption profiles</h4><div class="ed-row"><select id="ed-brand-profile" aria-label="Saved caption profile"><option value="">Choose saved profile</option>' +
+        Object.keys(captionProfiles).map(name => '<option value="' + esc(name) + '">' + esc(name) + '</option>').join('') + '</select></div>' +
+        '<div class="ed-row"><input type="text" id="ed-brand-name" maxlength="60" placeholder="Profile name" aria-label="Caption profile name"><button type="button" id="ed-brand-save" class="mini-btn">Save current look</button></div>' +
         '<p class="muted">Tip: drag the captions on the preview to move them.</p>';
     } else if (tab === 'framing') {
       pane.innerHTML = '<h4>Layout</h4><div class="ed-lays">' + LAYOUTS.map(([k, n]) => '<button type="button" class="ed-lay' + (st.layout === k ? ' on' : '') + '" data-layout="' + k + '">' + layoutSvg(k) + '<small>' + n + '</small></button>').join('') + '</div>' +
@@ -309,7 +398,17 @@
       pane.innerHTML = '<h4>Volume</h4><div class="ed-row">' + VOLUMES.map(([n, v]) => chip('data-vol="' + v + '"', (v === 0 ? '🔇 ' : '🔊 ') + n, st.voice_volume === v)).join('') + '</div>' +
         '<label class="ed-chk"><input type="checkbox" data-key="fade_inout"' + (st.fade_inout ? ' checked' : '') + '> Fade in and out</label>';
     } else {
-      pane.innerHTML = '<label class="ed-chk"><input type="checkbox" data-key="hook_enabled"' + (st.hook_enabled ? ' checked' : '') + '> Opening heading</label>' +
+      pane.innerHTML = '<h4>At the playhead</h4><div class="ed-row">' +
+        [['hit','Bass hit'],['sweep','Sweep'],['flash','Flash']].map(([value,label]) => chip('data-cue="' + value + '"',label,false)).join('') + '</div>' +
+        (st.effect_cues || []).map((cue,i) => '<div class="ed-row"><span>' + fmt(cue.at) + ' · ' + ({hit:'Bass hit',sweep:'Sweep',flash:'Flash'})[cue.kind] +
+          '</span><button type="button" class="mini-btn" data-delete-cue="' + i + '">Remove</button></div>').join('') +
+        '<h4>Look recipes</h4><div class="ed-row">' +
+        Object.entries(RECIPES).map(([value,recipe]) => chip('data-recipe="' + value + '"',recipe.label,st.recipe === value)).join('') + '</div>' +
+        '<label class="ed-chk"><input type="checkbox" data-key="clip_progress"' + (st.clip_progress ? ' checked' : '') + '> Clip progress bar</label>' +
+        '<label class="ed-chk"><input type="checkbox" data-key="loop_end"' + (st.loop_end ? ' checked' : '') + '> Blend the ending into the opening frame</label>' +
+        '<h4>Censor spoken words</h4><div class="ed-row">' + [['off','Off'],['mute','Mute'],['bleep','Bleep'],['bar','Mute + bar'],['blur','Mute + blur']].map(([value,label]) => chip('data-censor="' + value + '"',label,(st.censor_mode || 'off') === value)).join('') + '</div>' +
+        '<label>Words to censor<input type="text" data-key="censor_words" maxlength="1000" placeholder="Separate words with commas" value="' + esc(st.censor_words) + '"></label>' +
+        '<h4>Heading</h4><label class="ed-chk"><input type="checkbox" data-key="hook_enabled"' + (st.hook_enabled ? ' checked' : '') + '> Opening heading</label>' +
         '<input type="text" data-key="hook" maxlength="65" value="' + esc(st.hook) + '" placeholder="Opening line" class="ed-text">' +
         '<div class="ed-row">' + HOOKS.map(([k, n]) => chip('data-hook="' + k + '"', n, st.hook_style === k)).join('') + '</div>' +
         '<h4>Camera look</h4><div class="ed-row">' + LOOKS.map(([n, b, c, s, k]) => chip('data-look="' + [b, c, s, k].join(',') + '"', n, st.cam_brightness === b && st.cam_contrast === c && st.cam_saturation === s && st.cam_clarity === k)).join('') + '</div>';
@@ -354,14 +453,35 @@
     else if ((b = q('[data-aspect]'))) commit(() => { st.aspect = b.dataset.aspect; });
     else if ((b = q('[data-preset]'))) commit(() => { st.aspect = 'vertical'; st.resolution = 1080; st.fps = 30; st.preset = b.dataset.preset; });
     else if ((b = q('[data-vol]'))) commit(() => { st.voice_volume = Number(b.dataset.vol); });
+    else if ((b = q('[data-censor]'))) commit(() => { st.censor_mode = b.dataset.censor; });
+    else if ((b = q('[data-cue]'))) {
+      if ((st.effect_cues || []).length >= 16) { note('At most 16 effects per clip.'); return; }
+      const at = Number(Math.min(vt,Math.max(0,length()-.05)).toFixed(3));
+      commit(() => { st.effect_cues = [...(st.effect_cues || []),{ kind:b.dataset.cue,at }]; });
+    }
+    else if ((b = q('[data-delete-cue]'))) commit(() => { st.effect_cues.splice(Number(b.dataset.deleteCue),1); });
+    else if ((b = q('[data-recipe]'))) commit(() => {
+      const { label, ...recipe } = RECIPES[b.dataset.recipe];
+      Object.assign(st, recipe, { captions: true, recipe: b.dataset.recipe });
+    });
+    else if (q('#ed-brand-save')) saveCaptionProfile();
     else if ((b = q('[data-hook]'))) commit(() => { st.hook_style = b.dataset.hook; });
     else if ((b = q('[data-look]'))) commit(() => { const [br, co, sa, cl] = b.dataset.look.split(',').map(Number); st.cam_brightness = br; st.cam_contrast = co; st.cam_saturation = sa; st.cam_clarity = cl; });
     else if ((b = q('[data-pa]'))) pieceAction(b.dataset.pa);
     else if ((b = q('[data-seek]'))) seekTo(Number(b.dataset.seek));
     else if ((b = q('[data-del]'))) commit(() => { st.words.splice(Number(b.dataset.del), 1); });
+    else if ((b = q('[data-cut-word]'))) cutWord(Number(b.dataset.piece), Number(b.dataset.cutWord));
   }
   function onChange(e) {
     if (!st) return; const t = e.target;
+    if (t.id === 'ed-brand-profile') {
+      const profile = Object.hasOwn(captionProfiles, t.value) ? captionProfiles[t.value] : null;
+      if (profile) {
+        commit(() => { for (const key of CAPTION_BRAND_KEYS) st[key] = profile[key] || ''; });
+        note('Caption profile applied.');
+      }
+      return;
+    }
     if (t.matches('#ed-words [data-word]')) { const i = Number(t.dataset.word), text = t.value.trim(); if (!text) commit(() => { st.words.splice(i, 1); }); else if (text !== st.words[i].text) { const old = st.words[i].text; commit(() => { st.words[i].text = text; }); askAlways(old, text); } return; }
     const key = t.dataset && t.dataset.key; if (!key) return;
     const value = t.type === 'checkbox' ? t.checked : (t.type === 'color' ? t.value.toUpperCase() : t.value); if (st[key] === value) return; commit(() => { st[key] = value; });
@@ -401,23 +521,65 @@
   setTimeout(loadGloss, 0);
 
   // ---------- transcript (words as chips; click to jump, edit, remove)
+  function cutWord(pieceIndex, wordIndex) {
+    const piece = st.pieces[pieceIndex], word = st.words[wordIndex];
+    if (!piece || !word) return;
+    const a = Math.max(piece.start, word.a), b = Math.min(piece.end, word.b);
+    if (a >= b) return;
+    const keep = [];
+    if (a - piece.start >= .2) keep.push({ start: piece.start, end: a });
+    if (piece.end - b >= .2) keep.push({ start: b, end: piece.end });
+    const next = st.pieces.slice();
+    next.splice(pieceIndex, 1, ...keep);
+    if (!fits(next, false)) return;
+    if (playing) togglePlay();
+    commit(() => { st.pieces = next; sel = Math.min(pieceIndex, next.length - 1); vt = Math.min(vt, length()); });
+    seekTo(vt);
+  }
   function drawTranscript() {
     const box = $('ed-words'); if (!st) { box.innerHTML = ''; return; }
     const rw = rel(st.pieces);
-    box.innerHTML = rw.length ? rw.map(w => '<span class="w"><button type="button" class="seek" data-seek="' + w.start.toFixed(2) + '" title="Jump here">▸</button><input value="' + esc(w.text) + '" data-word="' + w.i + '" size="' + Math.max(2, w.text.length) + '" aria-label="Word"><button type="button" class="del" data-del="' + w.i + '" title="Remove this word">✕</button></span>').join('') : '<p class="muted">This clip has no saved transcript.</p>';
+    box.innerHTML = rw.length ? rw.map(w => '<span class="w"><button type="button" class="seek" data-seek="' + w.start.toFixed(2) + '" title="Jump here">▸</button><input value="' + esc(w.text) + '" data-word="' + w.i + '" size="' + Math.max(2, w.text.length) + '" aria-label="Word"><button type="button" class="del" data-del="' + w.i + '" title="Remove caption word only">✕</button><button type="button" class="cut-word" data-cut-word="' + w.i + '" data-piece="' + w.piece + '" title="Cut this word from the video" aria-label="Cut ' + esc(w.text) + ' from video">✂</button></span>').join('') : '<p class="muted">This clip has no saved transcript.</p>';
   }
 
   function updateButtons() {
     $('ed-undo').disabled = !undo.length; $('ed-redo').disabled = !redo.length;
     $('ed-reset').disabled = !dirty(); $('ed-export').disabled = !dirty(); $('ed-export').textContent = dirty() ? 'Export changes' : 'No changes yet';
+    const tracks = $('ed-export-tracks');
+    tracks.hidden = !info || ['blur', 'fill', 'game'].includes(info.settings?.layout || 'blur');
+    $('ed-reaction-gif').disabled = !file;
   }
 
+  async function exportTracks() {
+    if (!file) return;
+    const button = $('ed-export-tracks');
+    if (dirty()) { note('Export your changes first to include them in the editing tracks.'); return; }
+    button.disabled = true;
+    note('Preparing gameplay, facecam and XML…');
+    try {
+      const result = await req('/editor-export', { file });
+      const download = document.createElement('a');
+      download.href = result.download;
+      download.download = 'NeonClipping-editing-tracks.zip';
+      download.click();
+      note('Editing tracks ready. Extract the ZIP and import the XML.');
+    } catch (error) {
+      note(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
   async function exportNow() {
     if (!st || !dirty()) return;
     const scope = (document.querySelector('input[name=ed-scope]:checked') || {}).value || 'one', changes = {};
-    ['caption_style', 'captions', 'caption_y', 'voice_volume', 'caption_font', 'caption_size', 'caption_color', 'caption_active', 'caption_outline', 'caption_max_words', 'resolution', 'fps', 'layout', 'aspect', 'hook', 'hook_enabled', 'hook_style', 'fade_inout', 'top', 'cam', 'game', 'cam_brightness', 'cam_contrast', 'cam_saturation', 'cam_clarity'].forEach(k => { changes[k] = st[k]; });
+    ['caption_style', 'captions', 'caption_y', 'voice_volume', 'caption_font', 'caption_size', 'caption_color', 'caption_active', 'caption_outline', 'caption_max_words', 'resolution', 'fps', 'layout', 'aspect', 'hook', 'hook_enabled', 'hook_style', 'fade_inout', 'top', 'cam', 'game', 'cam_brightness', 'cam_contrast', 'cam_saturation', 'cam_clarity', 'censor_mode', 'censor_words', 'clip_progress', 'loop_end'].forEach(k => { changes[k] = st[k]; });
     const body = { file, scope, changes }, o = JSON.parse(original);
     const cut = JSON.stringify(o.pieces) !== JSON.stringify(st.pieces);
+    const cues = (st.effect_cues || []).filter(cue => cue.at < length());
+    if (JSON.stringify(o.effect_cues || []) !== JSON.stringify(cues)) {
+      if (scope === 'video') { note('Place timed effects on one clip at a time.'); return; }
+      changes.effect_cues = cues;
+    }
     if (cut || JSON.stringify(o.words) !== JSON.stringify(st.words)) {
       if (scope === 'video') { note('Transcript edits and cutting work on one clip at a time. Pick "Only this clip".'); return; }
       body.words = rel(st.pieces).map(w => ({ start: Number(w.start.toFixed(3)), end: Number(w.end.toFixed(3)), text: w.text }));
@@ -441,7 +603,29 @@
     } catch (e) { note(e.message); updateButtons(); }
   }
 
-  async function show() { if (!$('clip-editor-view')) return; await loadList(); if (!file && clips.length) openClip(clips[0].id); }
+  async function loadCaptionProfiles() {
+    try { captionProfiles = (await req('/brands')).profiles || {}; profilesReady = true; }
+    catch (error) { note(error.message); }
+    if (st && tab === 'captions') drawPane();
+  }
+  async function saveCaptionProfile() {
+    const name = $('ed-brand-name').value.trim();
+    if (!name) { note('Enter a caption profile name.'); return; }
+    const settings = Object.fromEntries(CAPTION_BRAND_KEYS.filter(key => st[key]).map(key => [key, st[key]]));
+    try {
+      await req('/brands', { name, settings });
+      await loadCaptionProfiles();
+      note('Caption profile saved.');
+    } catch (error) {
+      note(error.message);
+    }
+  }
+  async function show() {
+    if (!$('clip-editor-view')) return;
+    if (!profilesReady) loadCaptionProfiles();
+    await loadList();
+    if (!file && clips.length) openClip(clips[0].id);
+  }
   function init() {
     if ($('clip-editor-view')) return; const nav = document.querySelector('[data-view=library]'); if (!nav) return;
     build();

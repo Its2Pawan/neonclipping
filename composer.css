@@ -88,6 +88,23 @@
 @media(max-width:760px){.sd-summary{grid-template-columns:repeat(2,1fr)}.sd-row{flex-direction:column;align-items:stretch}}
 
 /* My clips: select and delete */
+.make-steps{display:flex;flex-wrap:wrap;gap:5px;list-style:none;padding:0;margin:7px 0 0}
+.make-steps li{font-size:11px;color:#c4b2d0;padding:3px 7px;border:1px solid #493858;border-radius:9px}
+.make-steps .running{color:#ffe7f2;border-color:#e565a0;background:#58213d}
+.make-steps .done{color:#9bf1d3;border-color:#397e70}
+.make-steps b{margin-right:3px}
+.result-overview{margin:10px 0 14px;padding:12px;background:#21172d;border:1px solid #4b365a;border-radius:12px}
+.result-controls,.result-source-labels,.result-dropped{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px}
+.result-controls label{flex-direction:row;align-items:center}
+.result-source-map{position:relative;height:26px;margin-top:9px;border:1px solid #473450;border-radius:6px;background:#150f1c}
+html body .result-source-map .result-marker{position:absolute;top:3px;bottom:3px;min-width:0;padding:0!important;border-radius:3px!important;background:#ffad7d!important;border:1px solid #ffbc9a!important}
+html body .result-source-map .result-marker.ready{background:#36cfa7!important;border-color:#8df0d3!important}
+.result-source-labels,.result-dropped small{color:#c6b4d4;font-size:11px}
+.result-overview details{margin-top:9px}
+.result-dropped{padding-top:7px}
+.result-metric{display:grid;grid-template-columns:55px minmax(0,1fr) 18px;gap:6px;align-items:center;font-size:11px;color:#ccc0d8}
+.result-metric span{height:4px;background:#40314a;border-radius:3px;overflow:hidden}
+.result-metric span i{height:100%;display:block;background:#cc64a7}
 .lib-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0 0}
 .lib-tools .mini-btn{padding:7px 13px;font-size:12px}
 .lib-tools .count{font-size:12px;color:var(--muted)}

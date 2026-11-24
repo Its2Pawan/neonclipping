@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from chat_replay import KINDS
 
 BUCKET = 10        # seconds per chat bucket
 HISTORY = 30       # buckets in the baseline (5 minutes)
@@ -23,6 +24,7 @@ SIGMA = 2.5        # spike = mean + SIGMA * stdev ...
 RATIO = 2.5        # ... and at least RATIO x the baseline mean
 MIN_MSGS = 8       # ... and at least this many messages in the bucket
 COOLDOWN = 60      # seconds between two automatic clips
+INTERVALS = (0, 2, 5, 10, 15)
 try:MIN_FREE_GB = float(os.environ.get('NEONCLIPPING_MIN_FREE_GB', '8'))   # an unattended (auto) session stops below this much free disk space
 except ValueError:MIN_FREE_GB = 8.0
 
@@ -48,6 +50,16 @@ def is_spike(count, history):
         return False
     mu, sd = statistics.mean(history), statistics.pstdev(history) or 1.0
     return count >= MIN_MSGS and count > mu + SIGMA * sd and count >= RATIO * max(mu, 1.0)
+
+
+def clip_interval(value):
+    if type(value) is not int or value not in INTERVALS:
+        raise ValueError('Choose chat spikes, or a clip every 2, 5, 10 or 15 minutes.')
+    return value
+
+
+def broad_spike(count, history, authors):
+    return is_spike(count, history) and (authors == 0 or authors >= min(4, count))
 
 
 def clean_title(title):
@@ -86,13 +98,16 @@ class LiveSession:
         self.creator = None          # set when the creator watcher started this session
         self.auto = False            # unattended: capped length, disk guard, recording deleted at the end
         self.max_seconds = None
+        self.clip_every = 0
         self.counts = collections.Counter()
+        self.authors = collections.defaultdict(set)
+        self.reactions = collections.defaultdict(collections.Counter)
         self.stop_ev = threading.Event()
         self.t0 = None
         self.proc = None
         self.lock = threading.Lock()
         self.state = {'id': self.id, 'status': 'starting', 'stage': 'Starting the recorder', 'platform': self.kind, 'target': self.ref,
-                      'clips': [], 'chat_now': 0, 'hist_n': 0, 'msgs30': 0, 'hype': 0, 'hype_label': 'quiet', 'title': '', 'baseline': 0.0, 'spikes': 0, 'elapsed': 0, 'chat': 'connecting', 'pending': 0, 'error': None}
+                      'clips': [], 'chat_now': 0, 'chat_unique': 0, 'hist_n': 0, 'msgs30': 0, 'hype': 0, 'hype_label': 'quiet', 'title': '', 'baseline': 0.0, 'spikes': 0, 'elapsed': 0, 'chat': 'connecting', 'pending': 0, 'error': None}
 
     # ---- helpers
     def _set(self, **kw):
@@ -101,6 +116,17 @@ class LiveSession:
 
     def now(self):
         return (time.time() - self.t0) if self.t0 else 0.0
+
+    def _note_chat(self, author, text):
+        bucket = int(time.time() // BUCKET)
+        with self.lock:
+            self.counts[bucket] += 1
+            authors = self.authors[bucket]
+            if author and len(authors) < 4096:
+                authors.add(author)
+            for kind in ('funny', 'hype', 'scare', 'fail'):
+                if KINDS[kind].search(text):
+                    self.reactions[bucket][kind] += 1
 
     # ---- chat readers
     def _twitch_chat(self):
@@ -120,7 +146,8 @@ class LiveSession:
                         if ln.startswith('PING'):
                             s.sendall(b'PONG :tmi.twitch.tv\r\n')
                         elif ' PRIVMSG ' in ln:
-                            self.counts[int(time.time() // BUCKET)] += 1
+                            prefix, _, text = ln[1:].partition(' :')
+                            self._note_chat(prefix.partition('!')[0], text)
             except Exception as e:
                 self._set(chat='reconnecting (' + type(e).__name__ + ')')
                 time.sleep(3)
@@ -136,16 +163,24 @@ class LiveSession:
                 chat = pytchat.create(video_id=self.ref, interruptable=False)   # True needs the main thread (signal handler)
                 self._set(chat='connected (read-only)')
                 while chat.is_alive() and not self.stop_ev.is_set():
-                    for _ in chat.get().sync_items():
-                        self.counts[int(time.time() // BUCKET)] += 1
+                    for item in chat.get().sync_items():
+                        author = getattr(item, 'author', None)
+                        self._note_chat(getattr(author, 'channelId', '') or getattr(author, 'name', ''),
+                                        str(getattr(item, 'message', '') or ''))
                     time.sleep(0.5)
             except Exception as e:
                 self._set(chat='reconnecting (' + type(e).__name__ + ': ' + str(e)[:80] + ')')
                 time.sleep(3)
 
     # ---- clips
+    def _schedule_cut(self, start, dur, why, chat_feature, delay=0):
+        with self.lock:
+            self.state['pending'] += 1
+        timer = threading.Timer(delay, self._cut, args=(start, dur, why, chat_feature))
+        timer.daemon = True
+        timer.start()
+
     def _cut(self, start, dur, why, chat_feature):
-        self._set(pending=self.state['pending'] + 1)
         try:
             clip = self.render(self, max(0.0, start), dur, why, chat_feature)
             if clip:
@@ -155,12 +190,14 @@ class LiveSession:
             with self.lock:
                 self.state['clips'].append({'error': str(e)[-200:], 'title': 'Clip failed', 'why': why})
         finally:
-            self._set(pending=max(0, self.state['pending'] - 1))
+            with self.lock:
+                self.state['pending'] = max(0, self.state['pending'] - 1)
 
     def clip_now(self, seconds=30):
         if not self.t0:
             raise RuntimeError('Recording has not started yet.')
-        threading.Thread(target=self._cut, args=(self.now() - seconds, seconds, 'You pressed Clip now', None), daemon=True).start()
+        duration = min(seconds, self.now())
+        self._schedule_cut(self.now() - duration, duration, 'You pressed Clip now', None)
 
     def _fetch_title(self):
         """Stream title (Twitch via Streamlink metadata, YouTube via yt-dlp) for the optional 'hook from the stream title'."""
@@ -206,6 +243,8 @@ class LiveSession:
             threading.Thread(target=self._fetch_title, daemon=True).start()
             self._set(status='recording', stage='Recording and watching chat')
             last_clip, seen = -1e9, None
+            cadence = self.clip_every * 60
+            next_clip = cadence
             while not self.stop_ev.is_set() and self.proc.poll() is None:
                 time.sleep(1)
                 done_bucket = int(time.time() // BUCKET) - 1
@@ -218,27 +257,50 @@ class LiveSession:
                     self.proc.terminate()
                     break
                 cur = int(time.time() // BUCKET)
-                m30 = sum(self.counts.get(b, 0) for b in (cur - 2, cur - 1, cur))
+                with self.lock:
+                    buckets = (cur - 2, cur - 1, cur)
+                    m30 = sum(self.counts.get(b, 0) for b in buckets)
+                    unique = len(set().union(*(self.authors.get(b, ()) for b in buckets)))
                 hype = hype_percent(m30, self.state['baseline'], self.state['hist_n'])
-                self._set(elapsed=int(self.now()), chat_now=self.counts.get(done_bucket + 1, 0), msgs30=m30, hype=hype, hype_label=hype_label(hype))
+                elapsed = self.now()
+                self._set(elapsed=int(elapsed), chat_now=self.counts.get(done_bucket + 1, 0), chat_unique=unique, msgs30=m30, hype=hype, hype_label=hype_label(hype))
+                if cadence and elapsed >= next_clip:
+                    next_clip += cadence
+                    if elapsed - last_clip > COOLDOWN and not self.state['pending']:
+                        last_clip = elapsed
+                        duration = self.before + self.after
+                        self._schedule_cut(elapsed - duration - 4, duration, f'Automatic clip every {self.clip_every} min', None)
                 if done_bucket == seen:
                     continue
                 seen = done_bucket
                 first = int(self.t0 // BUCKET)            # buckets before the session started are not 'usual chat', they are just empty
-                hist = [self.counts.get(b, 0) for b in range(max(first, done_bucket - HISTORY), done_bucket)]
+                with self.lock:
+                    hist = [self.counts.get(b, 0) for b in range(max(first, done_bucket - HISTORY), done_bucket)]
+                    c = self.counts.get(done_bucket, 0)
+                    people = len(self.authors.get(done_bucket, ()))
+                    reactions = self.reactions.get(done_bucket, {})
+                    reaction = max(reactions, key=reactions.get) if reactions else ''
+                    for bucket in list(self.counts):
+                        if bucket < done_bucket - HISTORY:
+                            del self.counts[bucket]
+                            self.authors.pop(bucket, None)
+                            self.reactions.pop(bucket, None)
                 self._set(hist_n=len(hist))
-                c = self.counts.get(done_bucket, 0)
                 self._set(baseline=round(statistics.mean(hist), 1) if hist else 0.0)
                 if len([h for h in hist if h]) < 6:
                     continue                                   # not enough chat history yet
                 mu = statistics.mean(hist)
                 at = done_bucket * BUCKET + BUCKET / 2 - self.t0
-                if is_spike(c, hist) and at - last_clip > COOLDOWN:
+                if broad_spike(c, hist, people) and at - last_clip > COOLDOWN:
                     last_clip = at
                     feature = min(1.0, c / (max(mu, 1.0) * 6.0))
                     self._set(spikes=self.state['spikes'] + 1)
                     why = f'Chat spike: {c} msgs/10s vs {mu:.0f} normal'
-                    threading.Timer(self.after + 4, lambda a=at, w=why, f=feature: self._cut(a - self.before, self.before + self.after, w, f)).start()
+                    if people:
+                        why += f' · {people} chatters'
+                    if reaction:
+                        why += f' · {reaction}'
+                    self._schedule_cut(at - self.before, self.before + self.after, why, feature, self.after + 4)
             if not self.stop_ev.is_set() and self.state['status'] != 'error':
                 self._set(status='ended', stage=self.state['stage'] if self.auto and self.max_seconds and self.now() > self.max_seconds else 'The stream ended.')
         except Exception as e:

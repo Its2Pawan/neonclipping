@@ -1,4 +1,5 @@
 from pathlib import Path
+from contextlib import asynccontextmanager
 import json, subprocess, uuid, threading, shutil
 import sys
 import time
@@ -24,10 +25,16 @@ import styling
 import brands
 import hooks
 import curation
+import clip_effects
 import facecam_detect
 ROOT=Path(__file__).resolve().parent
 DATA=Path(os.environ.get('NEONCLIPPING_DATA_DIR',str(ROOT/'data'))).resolve();DATA.mkdir(parents=True,exist_ok=True)
-app=FastAPI()
+@asynccontextmanager
+async def lifespan(application):
+ try:yield
+ finally:application.processing_queue.close()
+
+app=FastAPI(lifespan=lifespan)
 state={}
 import watchdog;watchdog.start(state,report.log_error)      # flags a job that has not moved for 15 minutes and logs where it waits
 def probe(p):
@@ -141,7 +148,12 @@ def start_export(b,job=None):
  except (KeyError,ValueError,TypeError,OverflowError):raise HTTPException(400,'Check crop regions, face height and caption position.')
  try:width,height,fps=output_settings(b)
  except (ValueError,TypeError,OverflowError) as e:raise HTTPException(400,str(e))
- if b.get('captions') and 'words' in b:
+ try:censor_mode,censor_terms=clip_effects.settings(b);effect_cues=clip_effects.cues(b,end-start)
+ except ValueError as e:raise HTTPException(400,str(e))
+ camera_layer=next((layer for layer in geometry(layout,top,width,height)['layers'] if layer['source']=='cam'),None)
+ if censor_terms and censor_mode in ('bar','blur') and (not camera_layer or b.get('template','none') not in ('none','')):
+  raise HTTPException(400,'Choose a facecam layout without a social-card template for that censorship effect.')
+ if (b.get('captions') or censor_mode!='off') and 'words' in b:
   try:b={**b,'words':subtitles.validate_words(b['words'],end-start)}
   except (ValueError,KeyError,TypeError,OverflowError) as e:raise HTTPException(400,str(e))
  import camfx
@@ -158,16 +170,14 @@ def start_export(b,job=None):
  def work():
   try:
    words=[]
-   if b.get('captions',False):
+   if b.get('captions',False) or censor_mode!='off' and censor_terms:
     if isinstance(b.get('words'),list):
      for word in b['words']:
       a=float(word['start']);z=float(word['end']);text=str(word['text'])[:100]
       if math.isfinite(a) and math.isfinite(z) and 0<=a<z<=end-start+.1:words.append({'start':a,'end':z,'text':text})
     else:words=transcribe(src,start,end,DATA,lambda msg:state[job].update(message=msg),b.get('language') or None)['words']
    dur=end-start;g2=graph
-   if plan:plan.data=DATA;plan.job=job;g2=plan.graph(graph,src,width,height,dur)
    placement=text_positions(layout,top,position,width,height);hook_y=placement['hook_y'];caption_pos=placement['caption_y'];hook_text=str(b.get('hook',''))
-   if plan and plan.template!='none':caption_pos=plan.template_caption_y;hook_text=''
    fixes=glossary.entries()         # your words list (names, English words said in a Hindi accent): before and after Hinglish
    words=glossary.fix_words(words,fixes);hook_text=glossary.fix_text(hook_text,fixes)
    if b.get('language')!='hi':      # Hindi is always written in Roman letters (Hinglish) unless हिंदी was picked on purpose
@@ -175,13 +185,40 @@ def start_export(b,job=None):
     words=[dict(w,text=roman_text(w['text'])) for w in words];words=[w for w in words if w['text'].strip()];hook_text=roman_text(hook_text)
     words=glossary.fix_words(words,fixes);hook_text=glossary.fix_text(hook_text,fixes)
    saved_text={k:glossary.fix_text(roman_text(glossary.fix_text(str(b.get(k) or ''),fixes)) if b.get('language')!='hi' else glossary.fix_text(str(b.get(k) or ''),fixes),fixes) for k in ('hook','title','post_caption') if b.get(k)}
-   ass,srt=write_captions(words,style,DATA,job,hook_text,caption_pos,hook_y,width,height,b.get('caption_anim') or 'highlight',b)
-   if words:
+   masked,spans=clip_effects.masked_words(words,censor_terms,dur) if censor_mode!='off' else (words,[])
+   visual=clip_effects.video_filter(censor_mode,spans,camera_layer)
+   if visual:g2=g2.replace('[base]','[effect_input]')+';'+visual
+   if plan:plan.data=DATA;plan.job=job;g2=plan.graph(g2,src,width,height,dur)
+   if plan and plan.template!='none':caption_pos=plan.template_caption_y;hook_text=''
+   if b.get('loop_end') is True and dur>1:
+    original,end_tag=g2.rsplit('[base]',1)
+    g2=original+'[effect_input]'+end_tag+';'+clip_effects.loop_filter(dur,fps)
+   if effect_cues:
+    flash=clip_effects.timed_flash(effect_cues)
+    if flash:
+     original,end_tag=g2.rsplit('[base]',1)
+     g2=original+'[effect_input]'+end_tag+';'+flash
+   if b.get('clip_progress') is True:
+    original,end_tag=g2.rsplit('[base]',1)
+    g2=original+'[effect_input]'+end_tag+';'+clip_effects.progress_filter(width,height,dur,fps)
+   visible_words=masked if b.get('captions') else []
+   ass,srt=write_captions(visible_words,style,DATA,job,hook_text,caption_pos,hook_y,width,height,b.get('caption_anim') or 'highlight',b)
+   if visible_words:
     (DATA/(job+'.vtt')).write_text(subtitles.write_track(subtitles.parse_track((DATA/srt).read_text(encoding='utf-8'),allow_overlap=True),'vtt',allow_overlap=True),encoding='utf-8')
    if plan:styling.append_ass(DATA/ass,plan,dur)
    fc=g2+f';[base]ass=filename={ass}[v]'
-   af,amap=plan.audio(dur) if plan else (None,None)
+   audio_source='[0:a]'
+   has_audio=(plan.has_audio if plan else styling.source_info(src)[1]) if spans or effect_cues else False
+   if spans and has_audio:
+    fc+=';'+clip_effects.audio_filter(spans,dur,censor_mode)
+    audio_source='[censored]'
+   cue_audio=clip_effects.timed_audio(effect_cues,dur,audio_source,has_audio)
+   if cue_audio:
+    fc+=';'+cue_audio
+    audio_source='[editor_mix]'
+   af,amap=plan.audio(dur,audio_source) if plan else (None,None)
    if af:fc+=';'+af
+   if not amap and audio_source!='[0:a]':amap=audio_source
    vmap='[v]';fade_af=None
    if hooks.fade_on(b) and dur>1.2:
     fc+=f';[v]fade=t=in:st=0:d=0.25,fade=t=out:st={max(0,dur-0.3):.2f}:d=0.3[vfade]';vmap='[vfade]'
@@ -191,8 +228,11 @@ def start_export(b,job=None):
     vol=float(b.get('voice_volume',1))
     if vol!=1 and 0<=vol<=2:voice_af='volume=%.2f'%vol
    except (TypeError,ValueError):pass
-   state[job].update(message='Rendering vertical clip with '+style+' captions' if words else 'Rendering vertical clip')
-   base=['ffmpeg','-y','-v','error','-ss',str(start),'-t',str(end-start),'-i',str(src),*(plan.inputs if plan else []),'-filter_complex',fc,'-map',vmap,'-map',amap or '0:a?',*(['-af',','.join(x for x in (voice_af,fade_af) if x)] if (fade_af or voice_af) else []),'-t',str(dur),'-c:a','aac','-b:a','160k','-movflags','+faststart']
+   audio_filters=','.join(x for x in (voice_af,fade_af) if x)
+   if audio_filters and amap:
+    fc+=f';{amap}{audio_filters}[audio_finish]';amap='[audio_finish]';audio_filters=''
+   state[job].update(message='Rendering vertical clip with '+style+' captions' if visible_words else 'Rendering vertical clip')
+   base=['ffmpeg','-y','-v','error','-ss',str(start),'-t',str(end-start),'-i',str(src),*(plan.inputs if plan else []),'-filter_complex',fc,'-map',vmap,'-map',amap or '0:a?',*(['-af',audio_filters] if audio_filters else []),'-t',str(dur),'-c:a','aac','-b:a','160k','-movflags','+faststart']
    if fps:base+=['-r',str(fps),'-fps_mode','cfr']
    for encoder in encoders.h264(cq=20,x264_preset='fast',nv_preset='p5'):
     # NVIDIA: also decode the source on the GPU (4K VP9/AV1 on the CPU is what pinned it at 100%); retry on the CPU if that fails.
@@ -201,14 +241,14 @@ def start_export(b,job=None):
      if r.returncode==0:break
     if r.returncode==0:break
    if r.returncode:raise RuntimeError(r.stderr[-900:])
-   finished={'status':'done','file':job,'meta':probe(out),'encoder':encoder[1],'caption_words':len(words),'srt':f'/text/{job}/srt' if words else None}
+   finished={'status':'done','file':job,'meta':probe(out),'encoder':encoder[1],'caption_words':len(visible_words),'srt':f'/text/{job}/srt' if visible_words else None}
    (DATA/(job+'.json')).write_text(json.dumps({'source':id,'settings':{**b,**saved_text,'words':words},'result':finished},indent=2),encoding='utf-8')
    state[job]=finished
   except Exception as e:state[job]={'status':'error','error':str(e)}
  threading.Thread(target=work,daemon=True).start();return {'job':job}
 try:LIVE_AUTO_HOURS=max(.25,float(os.environ.get('NEONCLIPPING_LIVE_AUTO_HOURS','3')))   # unattended creator-watch sessions stop after this many hours
 except ValueError:LIVE_AUTO_HOURS=3.0
-PAD=4.0         # seconds fetched before a section: yt-dlp cuts on a keyframe, export trims exactly
+PAD=15.0        # keep editable context around audio-first highlights; export still trims the selected range
 FAST_OVER=600   # seconds: longer videos go audio-first, short ones are downloaded whole
 def _yt(opts):
  return ytdl.YDL({'noplaylist':True,'quiet':True,'no_warnings':True,'socket_timeout':20,'retries':3,'fragment_retries':3,'concurrent_fragment_downloads':6,
@@ -282,12 +322,15 @@ def start_make(b, previous=None):
  if profile not in curation.PROFILES:raise HTTPException(400,'Choose Balanced, Action or Dialogue moments.')
  try:focus_brief,include_phrases,exclude_phrases=curation.focus_settings(b)
  except ValueError as error:raise HTTPException(400,str(error))
+ if not moments:
+  from intent import requested_count
+  count=requested_count(focus_brief,count)
  acc='best' if b.get('accurate')=='best' else 'fast'     # the turbo/"accurate" local model was removed: its captions were worse than YouTube's. Only Best Hindi (large-v3) uses a local model on purpose.
  layout=b.get('layout','blur');style=b.get('caption_style',captions.DEFAULT_STYLE);language=b.get('language') or None
  if not languages.valid(language):raise HTTPException(400,'Choose Auto, Hinglish or a language from the list.')
  from translit import to_hinglish
  top_h=b.get('top');cam=b.get('cam') or {'x':0,'y':0,'w':.25,'h':.3};game=b.get('game') or {'x':.25,'y':0,'w':.75,'h':1}
- job=uuid.uuid4().hex;save(job,{'id':job,'status':'running','stage':'Starting','progress':0,'clips':[],'source':{'url':url}})
+ job=uuid.uuid4().hex;save(job,{'id':job,'status':'running','stage':'Starting','phase':'source','progress':0,'clips':[],'source':{'url':url,'id':str(b.get('id') or '')}})
  checkpoint_path=DATA/(job+'.resume.json')
  checkpoint=dict(previous or {},request=b)
  def persist():
@@ -312,7 +355,7 @@ def start_make(b, previous=None):
     found=cached['found'];engine=cached['engine'];sid=cached['sid'];p=DATA/cached['media']
     uploader=cached['uploader']
     game_name=cached.get('game_name')
-    save(job,{'engine':engine,'stage':'Resuming saved moments','candidates':len(found)})
+    save(job,{'engine':engine,'stage':'Resuming saved moments','phase':'prepare','candidates':len(found)})
    elif 'source_info' in checkpoint:
     src_info=checkpoint['source_info']
     fast=src_info['fast'];video_lang=src_info['language'];title=src_info['title'];yt_words=src_info['words'];heat=src_info.get('heatmap')
@@ -352,6 +395,8 @@ def start_make(b, previous=None):
    save(job,{'fast_path':fast,'title':title})
    import learn, action
    import vision
+   react=flags['face_reaction'] and b.get('mode')=='deep'
+   face_model=vision.model() if flags['facecam_check'] or react else None
    from concurrent.futures import ThreadPoolExecutor as _TP
    W=curation.profile_weights(learn.load_weights(DATA),profile)
    performance=social.duration_preferences(DATA)
@@ -380,14 +425,10 @@ def start_make(b, previous=None):
      finally:
       if tmp:Path(tmp).unlink(missing_ok=True)
     with _TP(max_workers=4) as ex:list(ex.map(one,top))
-    for key in ('motion','flash','strobe','cuts'):
-     vals=[c['_act'][key] for c in top if c.get('_act')]
-     if not vals:continue
-     lo,hi=min(vals),max(vals)
-     for c in top:
-      if c.get('_act'):
-       v=c['_act'][key];c['features'][key]=round(.5*v+.5*((v-lo)/(hi-lo) if hi>lo else v),3)
     for c in top:
+     if c.get('_act'):
+      for key in ('motion','flash','strobe','cuts'):
+       c['features'][key]=round(c['_act'][key],3)
      if c.get('visual_review'):
       try:
        import smart
@@ -396,7 +437,9 @@ def start_make(b, previous=None):
        old=c['features'].get('llm');c['features']['llm']=judged['score']/10 if old is None else .7*old+.3*judged['score']/10
        if focus_brief:c['focus_match']=judged['focus_match']
       except Exception as error:c['visual_error']=str(error)[-160:]
-     c['rank']=max(0,min(1,curation.focus_rank(learn.score(c['features'],W),c.get('focus_match'))+performance.get(int((c['end']-c['start'])//15),0)));c['score']=round(c['rank']*100)
+     current=curation.focus_rank(learn.score(c['features'],W),c.get('focus_match'))+performance.get(int((c['end']-c['start'])//15),0)+c.get('direction_boost',0)
+     if c.get('head_to_head') is not None:current=.7*current+.3*c['head_to_head']
+     c['rank']=max(0,min(1,current));c['score']=round(c['rank']*100)
      cues=[n for n,k,t in (('shouting','shout',.6),('loud jump','loud',.6),('exclamations','words',.5),('fast motion','motion',.7),('explosion/flash','flash',.5),('police-light flicker','strobe',.5)) if (c['features'].get(k) or 0)>=t]
      c['reason']=(('Cues: '+', '.join(cues)) if cues else 'Steady energy')+(f" · AI {c['llm']:g}/10" if c.get('llm') else '')
      if c.get('visual_review'):c['reason']+=' · 3 visual frames reviewed'
@@ -427,7 +470,7 @@ def start_make(b, previous=None):
      checkpoint['audio']=p.name
      persist()
     duration=_dur(p);sid=job
-    save(job,{'meta':{'duration':duration},'stage':'Finding moments in audio','progress':.12})
+    save(job,{'meta':{'duration':duration},'stage':'Finding moments in audio','phase':'analyze','progress':.12})
     beat={'live':True,'seen':time.monotonic()}
     def scan_report(f,m):beat['seen']=time.monotonic();save(job,{'stage':m,'progress':.12+.4*f})
     def heartbeat():
@@ -448,7 +491,7 @@ def start_make(b, previous=None):
     if url:
      save(job,{'stage':'Downloading source ('+quality_label(src_h)+')','progress':.02});sid,p=app.neon['download'](url,job,src_h)
     else:sid,p=src0.stem,src0
-    meta=probe(p);duration=meta['duration'];save(job,{'source_id':sid,'meta':meta,'stage':'Finding moments','progress':.1})
+    meta=probe(p);duration=meta['duration'];save(job,{'source_id':sid,'meta':meta,'stage':'Finding moments','phase':'analyze','progress':.1})
     game_name,game_tags=detect_game();chat_sig=chat_ready()
     found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig,whole=flags['whole_pass'] or b.get('whole_pass') is True,rerank_on=flags['rerank'],fair=flags['fair_order'])
     found=choose(found,lambda c:(p,c['start']))
@@ -459,6 +502,12 @@ def start_make(b, previous=None):
    if not cached:      # 1F: the game's own tags go first on every post, whatever the AI wrote
     for c in found:
      seen=set();c['hashtags']=[x for x in list(game_tags)+list(c.get('hashtags') or []) if not (x.lower() in seen or seen.add(x.lower()))][:8]
+    if b.get('mode')=='deep' and not moments and any(c.get('transcript') for c in found):
+     import smart
+     reviewer=smart._model(True)
+     if reviewer:
+      save(job,{'stage':'Reviewing finalists for complete moments'})
+      smart.review_finalists(found,reviewer)
    if game_name:save(job,{'game':game_name})
    dropped_frozen=[]
    done=[];cam_use,game_use,cam_checked,layout_use=cam,game,not b.get('cam_auto',True),layout       # facecam search is on unless switched off
@@ -482,7 +531,7 @@ def start_make(b, previous=None):
      for attempt in range(3):     # an FFmpeg crash on one section (seen on some FFmpeg 9.1 builds) must not lose the whole video
       try:
        with _yt({'format':(source_format(src_h) if attempt<2 else 'b[height<=720][ext=mp4]/b[height<=720]/b'),'merge_output_format':'mp4','outtmpl':str(DATA/(name+'.%(ext)s')),
-                 'download_ranges':download_range_func(None,[(max(0,c['start']-PAD),c['end']+1)])}) as y:y.download([url])
+                 'download_ranges':download_range_func(None,[(max(0,c['start']-PAD),c['end']+PAD)])}) as y:y.download([url])
        return name
       except Exception:
        if attempt==2:raise
@@ -492,6 +541,7 @@ def start_make(b, previous=None):
     if finished(i):
      done.append(completed[str(i)]);save(job,{'clips':list(done)})
      continue
+    save(job,{'stage':f'Preparing clip {i+1}/{len(found)}','phase':'prepare','clip_index':i+1})
     if not moments and c.get('transcript') and b.get('hook_enabled') is not False:
      try:
       import smart
@@ -502,18 +552,36 @@ def start_make(b, previous=None):
      except Exception:pass
     if sections:
      sid2=sections[i].result();real=section_start(p,DATA/(sid2+'.mp4'),max(0,c['start']-PAD));start=max(0,c['start']-real);end=min(_dur(DATA/(sid2+'.mp4')),start+c['end']-c['start']);words=c.get('words')
-    else:sid2=sid;start=c['start'];end=c['end'];words=c.get('words')
+    else:sid2=sid;real=0;start=c['start'];end=c['end'];words=c.get('words')
+    if not moments and words:
+     from scene_edges import align
+     from reedit import trim_words
+     aligned_start,aligned_end=align(DATA/(sid2+'.mp4'),start,end,words,min_len)
+     if aligned_start>start+.075 or aligned_end<end-.075:
+      c['words']=trim_words(words,aligned_start-start,aligned_end-aligned_start)
+      start,end=aligned_start,aligned_end
+      c['start']=round(start+real,3);c['end']=round(end+real,3)
+      c['reason']=c.get('reason','')+' · aligned with scene cut'
     if flags['skip_frozen']:      # 1E: ad break, BRB slate or frozen screen: not worth a clip
      import frozen
      still,share=frozen.is_frozen(DATA/(sid2+'.mp4'),start,end-start)
      if still:
-      dropped_frozen.append({'start':c['start'],'end':c['end'],'frozen_share':round(share,2)});save(job,{'dropped_frozen':dropped_frozen,'stage':f'Skipped clip {i+1}: the picture is frozen (ad, BRB or loading screen)'})
+      dropped_frozen.append({'start':c['start'],'end':c['end'],'title':c.get('title') or 'Skipped moment','frozen_share':round(share,2)});save(job,{'dropped_frozen':dropped_frozen,'stage':f'Skipped clip {i+1}: the picture is frozen (ad, BRB or loading screen)'})
       continue
     if not cam_checked:
      cam_checked=True
      try:
       fc=facecam_detect.detect(DATA/(sid2+'.mp4'))
       info={k:fc.get(k) for k in ('found','confidence','method','cam','reason')}
+      if face_model and flags['facecam_check'] and fc.get('found'):
+       try:
+        save(job,{'stage':'Checking the facecam in one frame locally'})
+        check=vision.inspect_facecam(DATA/(sid2+'.mp4'),start+(end-start)*.45,fc['cam'],face_model)
+        info['vision']=check['facecam']
+        if check['facecam']=='no' and (fc.get('confidence') or 0)<.7:
+         fc['found']=info['found']=False
+         info['reason']='The local check did not confirm a facecam.'
+       except Exception:info['vision']='unavailable'
       if fc.get('found'):cam_use,game_use=fc['cam'],fc['game']
       elif layouts.needs_cam(layout) and layouts.is_default_cam(cam_use):
        layout_use='blur';info['layout_fallback']='blur'          # no webcam found and no boxes drawn: do not show an empty or wrong box
@@ -522,6 +590,14 @@ def start_make(b, previous=None):
     if cam_checked and 'framing' not in checkpoint:
      checkpoint['framing']=[cam_use,game_use,layout_use]
      persist()
+    if react and face_model and layouts.needs_cam(layout_use):
+     try:
+      save(job,{'stage':f'Checking facecam reaction {i+1}/{len(found)} locally'})
+      reaction=vision.inspect_facecam(DATA/(sid2+'.mp4'),start+(end-start)*.45,cam_use,face_model,True)['reaction']
+      if reaction in ('laugh','surprise'):
+       c['reason']=c.get('reason','')+' · visible '+reaction
+       c['score']=min(99,c['score']+4)
+     except Exception:pass
     lang=language or ('hinglish' if (video_lang.startswith('hi') or c.get('language')=='hi') else None)
     if language!='hi':
      from translit import roman_text
@@ -531,6 +607,15 @@ def start_make(b, previous=None):
     body={'id':sid2,'start':start,'end':end,'layout':layout_use,'top':(top_h if isinstance(top_h,(int,float)) and .2<=top_h<=.5 else .32),'captions':True,'caption_style':style,'language':language,'hook':(' '.join(to_hinglish(w) for w in c.get('hook','').split()) if lang=='hinglish' else c.get('hook','')),
           'aspect':b.get('aspect','vertical'),'resolution':b.get('resolution',1080),'fps':b.get('fps',0),'title':c.get('title',''),'post_caption':post_text(c),'punch_words':c.get('highlight_words') or [],'hashtags':c.get('hashtags') or [],'description':c.get('description',''),'batch_id':job,'source_url':url,'cam':cam_use,'game':game_use,'features':c.get('features'),'weights_used':W,'moment_profile':profile,'focus_brief':focus_brief,'focus_match':c.get('focus_match'),'visual_review':c.get('visual_review')}
     if game_name:body['game_name']=game_name
+    full_words=yt_words or checkpoint.get('source_info',{}).get('words') or []
+    context_words=[]
+    for w in full_words:
+     a=float(w['start'])-real;z=float(w['end'])-real
+     if z<max(0,start-PAD) or a>end+PAD or a<end and z>start:continue
+     text=glossary.fix_text(w['text'])
+     if lang=='hinglish':text=ascii_fold(to_hinglish(text)).strip()
+     if text:context_words.append({'start':max(0,a),'end':z,'text':text})
+    if context_words:body['context_words']=context_words
     for k in styling.KEYS+brands.KEYS+hooks.KEYS:
      if b.get(k) not in (None,''):body[k]=b[k]
     if b.get('credit_auto') and uploader and not body.get('credit'):body['credit']='Clip: '+uploader[:40]
@@ -561,10 +646,11 @@ def start_make(b, previous=None):
      saved=json.loads(output_record.read_text(encoding='utf-8'))
      if saved.get('result',{}).get('status')=='done':r=saved['result']
     if r is None:
+     save(job,{'stage':f'Exporting clip {i+1}/{len(found)}','phase':'render'})
      ej=start_export(body,ej)['job']
      while state.get(ej,{}).get('status')=='running':time.sleep(.7)
      r=state[ej]
-    done.append({'caption_fixes':c.get('caption_fixes',0),'hashtags':c.get('hashtags') or [],'description':c.get('description',''),'punch_words':c.get('highlight_words') or [],'parts':c.get('parts') or {},'viral':min(99,c['score']),'axes':axes(c.get('features') or {}),'file':ej,'start':c['start'],'end':c['end'],'title':c.get('title') or 'Clip %d'%(i+1),'hook':c.get('hook',''),'score':c['score'],'reason':c.get('reason',''),
+    done.append({'caption_fixes':c.get('caption_fixes',0),'hashtags':c.get('hashtags') or [],'description':c.get('description',''),'punch_words':c.get('highlight_words') or [],'parts':c.get('parts') or {},'viral':min(99,c['score']),'axes':axes(c.get('features') or {}),'file':ej,'start':c['start'],'end':c['end'],'title':c.get('title') or 'Clip %d'%(i+1),'hook':c.get('hook',''),'score':c['score'],'reason':c.get('reason',''),'review_reason':c.get('review_reason',''),
                  'error':r.get('error'),'srt':r.get('srt'),'visual_review':c.get('visual_review')})
     if r.get('status')=='done':
      completed[str(i)]=done[-1]
@@ -573,7 +659,7 @@ def start_make(b, previous=None):
    if any(item.get('error') for item in done):
     raise RuntimeError('Some clips failed. Resume this batch to retry the missing clips.')
    checkpoint_path.unlink(missing_ok=True)
-   save(job,{'status':'done','stage':'Clips ready','progress':1,'elapsed_seconds':round(time.monotonic()-began,1)})
+   save(job,{'status':'done','stage':'Clips ready','phase':'complete','progress':1,'elapsed_seconds':round(time.monotonic()-began,1)})
   except Exception as e:save(job,{'status':'error','error':str(e)[-600:]})
  threading.Thread(target=work,daemon=True).start();return {'job':job}
 LIVE={}
@@ -635,8 +721,10 @@ def start_live(target,opts,creator=None,before=24,after=14):
  import live_session
  for s_ in LIVE.values():
   if s_.state['status'] in ('starting','recording'):raise RuntimeError('A live session is already running. Stop it first.')
+ clip_every=live_session.clip_interval(opts.get('clip_every',0))
  sess=live_session.LiveSession(target,DATA,live_render,before,after)
  sess.creator=creator;sess.auto=bool(creator);sess.max_seconds=LIVE_AUTO_HOURS*3600 if creator else None
+ sess.clip_every=clip_every
  sess.opts={'layout':opts.get('layout','blur'),'caption_style':opts.get('caption_style',captions.DEFAULT_STYLE),'language':opts.get('language') or None,
             'cam':opts.get('cam') or {'x':0,'y':0,'w':.25,'h':.3},'game':opts.get('game') or {'x':.25,'y':0,'w':.75,'h':1},
             'aspect':opts.get('aspect','vertical'),'resolution':opts.get('resolution',1080),'fps':opts.get('fps',0),'top':opts.get('top') if isinstance(opts.get('top'),(int,float)) else .32,'creator':creator,
@@ -652,7 +740,7 @@ def live_start(b:dict):
  except ValueError as e:raise HTTPException(400,str(e))
  before=max(4,min(60,float(b.get('before',24))));after=max(2,min(40,float(b.get('after',14))))
  try:sid=start_live(target,b,None,before,after)
- except RuntimeError as e:raise HTTPException(400,str(e))
+ except (RuntimeError,ValueError) as e:raise HTTPException(400,str(e))
  return {'live':sid}
 
 @app.get('/live-active')
@@ -728,6 +816,28 @@ def feedback_summary():
  return learn.refit(DATA)
 
 resume_lock=threading.Lock()
+
+@app.post('/make/{job}/restore/{index}')
+def restore_frozen(job:str,index:int,body:dict):
+ with resume_lock:
+  batch=state.get(job,{})
+  dropped=batch.get('dropped_frozen') or []
+  if batch.get('status')!='done' or not 0<=index<len(dropped):
+   raise HTTPException(404,'This skipped moment is unavailable.')
+  source=batch.get('source') or {}
+  if not source.get('url') and not source.get('id'):
+   raise HTTPException(409,'The original source is unavailable.')
+  existing=(batch.get('restored') or {}).get(str(index))
+  if existing and state.get(existing,{}).get('status') in ('running','done'):
+   return {'job':existing}
+  moment=dropped[index]
+  settings={key:body[key] for key in ('layout','caption_style','resolution','aspect','fps','language','top','cam','game') if key in body}
+  settings.update(source,count=1,moments=[{'start':moment['start'],'end':moment['end'],'title':moment['title']}],features={'skip_frozen':False})
+  child=start_make(settings)['job']
+  restored=dict(batch.get('restored') or {})
+  restored[str(index)]=child
+  app.neon['save'](job,{'restored':restored})
+  return {'job':child}
 
 @app.post('/make/{job}/resume')
 def resume_make(job:str):
@@ -864,6 +974,7 @@ from reedit import attach as attach_reedit
 attach_reedit(app,DATA,state,probe,export,app.neon['save'])
 
 import bundles
+import editor_export;editor_export.attach(app,DATA,probe)
 bundles.attach(app,DATA)
 
 import jobs

@@ -1,11 +1,14 @@
 """Persistent local processing queue with pause, scheduled starts and explicit interrupted-job retry."""
 import json
+import logging
 import sqlite3
 import threading
 import time
 import uuid
 from pathlib import Path
 from fastapi import HTTPException
+
+LOG = logging.getLogger(__name__)
 
 class JobQueue:
     def __init__(self,path,handlers,state,autostart=True,resume_make=None):
@@ -100,7 +103,16 @@ class JobQueue:
 
     def run(self):
         while not self.stopped.is_set():
-            if not self.run_once():self.wake.wait(.5);self.wake.clear()
+            try:
+                if self.run_once():
+                    continue
+            except sqlite3.OperationalError as error:
+                if not self.path.parent.is_dir():
+                    return
+                LOG.warning("Processing queue storage is temporarily unavailable: %s", error)
+                self.stopped.wait(2)
+            self.wake.wait(.5)
+            self.wake.clear()
 
     def close(self):
         self.stopped.set();self.wake.set()

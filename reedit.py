@@ -11,9 +11,11 @@ CHANGE_KEYS = {'voice_volume','aspect','resolution','fps','layout','top','cam','
 from styling import KEYS as STYLE_KEYS
 from brands import KEYS as BRAND_KEYS,appearance
 from hooks import KEYS as HOOK_KEYS,settings as hook_settings
+from clip_effects import KEYS as CLIP_EFFECTS_KEYS
 CHANGE_KEYS = CHANGE_KEYS | set(STYLE_KEYS)
 CHANGE_KEYS = CHANGE_KEYS | set(BRAND_KEYS)
 CHANGE_KEYS = CHANGE_KEYS | set(HOOK_KEYS)
+CHANGE_KEYS = CHANGE_KEYS | set(CLIP_EFFECTS_KEYS)
 
 def trim_words(words, shift, length):
     """Move subtitle word times for a clip that now starts `shift` seconds later (negative = earlier) and lasts `length` seconds.

@@ -1,9 +1,17 @@
 # Changelog
 
 ## 2026-11-24
+- **Editor effects:** mute or bleep selected transcript words, add a facecam bar or blur during censored words, and add a playback progress strip to the export.
+- **Editing tracks:** download a Premiere Pro / DaVinci Resolve XML package from a saved facecam clip. Gameplay and transparent facecam are separate media tracks, with SRT included when available.
+- **Live clipping:** optionally make a clip at an interval as well as on chat spikes. The chat signal now counts distinct authors and shows the dominant reaction for a spike.
+- **Activity:** see which stage is running for source preparation, moment finding, captions and export.
+- **Clip Editor:** grey timeline areas show available source before and after the cut. Drag the edges to recover context, use Set in/Set out, or cut a spoken word from the video through the transcript. New audio-first clips keep up to 15 seconds of source on either side.
 - **Creators:** manage auto-clipping from its own sidebar tab. Saved YouTube channels also appear in the YouTube feed, and you can save a channel from its video or live card.
 - **YouTube:** see which gaming creators are live and browse recent uploads and replays. Sort by newest or by views per day, or send a video link straight to the clipping workspace.
-- **Campaigns:** open verified affiliate campaign links from the sidebar or a finished clip. Available filters include GTA, streams and India payouts.
+- **Campaigns:** browse open Content Rewards deals with their original posters, USD rates and prize pools. Affiliate links are available for Content Rewards, Clipster and 100x Clipping.
+- **Results:** see where clips land in the source, filter Ready and Review, and recover moments skipped for frozen frames.
+- **Editor:** export a reaction GIF, place timed bass hits, sweeps or flashes, enable a loop ending and reuse saved caption profiles.
+- **Posting:** save drafts to review before scheduling, with configurable daily caps and spacing.
 - **Hindi is always written in Hinglish** (Roman letters) in captions, hooks and titles, even when YouTube gives Hindi script or another caption language was picked. Only the हिंदी option keeps Devanagari. Spelling is chat-style: "ja raha hoon", "saccha", "shayad", "order" (not jaa, sachcha, shaayad, aardar).
 - **Your words:** change a word in the editor's transcript and press **Always fix**; every new clip spells it right from then on (names like Andy, English words said in a Hindi accent). Add or remove words in the editor under *Your words*. Works on YouTube captions and the speech model, before and after Hinglish, and keeps word timings.
 - **8 new caption styles** (Karaoke is the new default, TikTok, Pill, One word, Cinematic, Boxed, Outlined, Comic).
