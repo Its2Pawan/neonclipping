@@ -53,3 +53,7 @@ html body .mt-link.what.open{border-color:#25f4ee88!important;color:#fff!importa
 
 .st-tabs{display:flex;gap:6px;margin:6px 0 10px}html body .st-tabs button{background:#140f20!important;border:1px solid #2b2140!important;color:#d8cbe8!important;border-radius:99px;padding:6px 14px;cursor:pointer}html body .st-tabs button.on{border-color:#ff3d6e!important;color:#fff!important;background:#ff3d6e22!important}
 html body .import-note.quiet{display:none!important}
+
+/* viral score card: number, ready badge and the 4 parts (restored 24 Nov) */
+html body .viral .vr{font-size:10.5px;font-weight:700;padding:1px 8px;border-radius:99px;margin-left:6px}html body .viral .vr.ok{background:#9cff5722;color:#9cff57}html body .viral .vr.rv{background:#ffd45a22;color:#ffd45a}
+.vparts{display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;margin-top:5px;width:100%}.vp{display:grid;grid-template-columns:64px 1fr 18px;align-items:center;gap:5px;font-size:10px;color:#b9a9cc}.vp i{font-style:normal}.vp em{display:block;height:5px;border-radius:9px;background:linear-gradient(90deg,#ff3d6e,#25f4ee)}.vp small{text-align:right;color:#f6edfc}

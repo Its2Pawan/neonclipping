@@ -1,6 +1,8 @@
 # Changelog
 
 ## 2026-11-24
+- **Viral score is back on every card**, with the four parts (Hook, Engagement, Value, Share) as small bars and a Ready to post / Review first badge, also in My clips (old clips get it rebuilt from their saved signals).
+- **Fast mode is quicker again:** it reads moments with the lighter local model (llama3.2) and skips a second AI call for the opening heading when the first one already has a quote behind it; the bigger model is used in Balanced and Best. A 1h43m video gave 2 clips in about 2 minutes (was 3.5).
 - **Editor effects:** mute or bleep selected transcript words, add a facecam bar or blur during censored words, and add a playback progress strip to the export.
 - **Editing tracks:** download a Premiere Pro / DaVinci Resolve XML package from a saved facecam clip. Gameplay and transparent facecam are separate media tracks, with SRT included when available.
 - **Live clipping:** optionally make a clip at an interval as well as on chat spikes. The chat signal now counts distinct authors and shows the dominant reaction for a spike.

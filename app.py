@@ -97,7 +97,13 @@ def library():
   try:
    j=json.loads(f.read_text());result=j.get('result',{})
    if result.get('status')=='done' and not j.get('superseded_by') and (DATA/(f.stem+'.mp4')).exists():
-    records.append({'id':f.stem,'title':j.get('settings',{}).get('title') or 'NeonClipping clip','created':f.stat().st_mtime,'meta':result.get('meta',{}),'settings':j.get('settings',{}),'srt':bool(result.get('srt')) and (DATA/(f.stem+'.srt')).exists(),**app.reedit_metadata(f.stem,j,groups)})
+    st_=j.get('settings',{});sc_=st_.get('viral_score')
+    if sc_ is None and isinstance(st_.get('features'),dict):      # older clips: rebuild the score from the saved features
+     try:
+      import learn;wt_=st_.get('weights_used') if isinstance(st_.get('weights_used'),dict) else learn.DEFAULT
+      sc_=min(99,round(100*learn.score(st_['features'],{k:float(wt_.get(k,learn.DEFAULT[k])) for k in learn.FEATURES})))
+     except Exception:sc_=None
+    records.append({'score':sc_,'score_parts':st_.get('viral_parts') or {},'id':f.stem,'title':j.get('settings',{}).get('title') or 'NeonClipping clip','created':f.stat().st_mtime,'meta':result.get('meta',{}),'settings':j.get('settings',{}),'srt':bool(result.get('srt')) and (DATA/(f.stem+'.srt')).exists(),**app.reedit_metadata(f.stem,j,groups)})
   except (ValueError,OSError):pass
  return sorted(records,key=lambda j:j['created'],reverse=True)
 
@@ -483,7 +489,7 @@ def start_make(b, previous=None):
       if beat['live'] and time.monotonic()-beat['seen']>=4:save(job,{'stage':f'Finding moments in audio · working {int(time.monotonic()-t0)}s (long videos take a few minutes)'})
     threading.Thread(target=heartbeat,daemon=True).start()
     game_name,game_tags=detect_game();chat_sig=chat_ready()
-    try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig,whole=flags['whole_pass'] or b.get('whole_pass') is True,rerank_on=flags['rerank'],fair=flags['fair_order'])
+    try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig,whole=flags['whole_pass'] or b.get('whole_pass') is True,rerank_on=flags['rerank'],fair=flags['fair_order'],quality=b.get('mode') in ('balanced','deep'))
     finally:beat['live']=False
     found=choose(found,lambda c:lowres_section(url,c))
     if not found:
@@ -496,7 +502,7 @@ def start_make(b, previous=None):
     else:sid,p=src0.stem,src0
     meta=probe(p);duration=meta['duration'];save(job,{'source_id':sid,'meta':meta,'stage':'Finding moments','phase':'analyze','progress':.1})
     game_name,game_tags=detect_game();chat_sig=chat_ready()
-    found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig,whole=flags['whole_pass'] or b.get('whole_pass') is True,rerank_on=flags['rerank'],fair=flags['fair_order'])
+    found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig,whole=flags['whole_pass'] or b.get('whole_pass') is True,rerank_on=flags['rerank'],fair=flags['fair_order'],quality=b.get('mode') in ('balanced','deep'))
     found=choose(found,lambda c:(p,c['start']))
     if not found:
      checkpoint_path.unlink(missing_ok=True)
@@ -545,10 +551,10 @@ def start_make(b, previous=None):
      done.append(completed[str(i)]);save(job,{'clips':list(done)})
      continue
     save(job,{'stage':f'Preparing clip {i+1}/{len(found)}','phase':'prepare','clip_index':i+1})
-    if not moments and c.get('transcript') and b.get('hook_enabled') is not False:
+    if not moments and c.get('transcript') and b.get('hook_enabled') is not False and not (c.get('hook') and c.get('hook_evidence')):      # the judge's hook is already backed by a quote: no second AI call
      try:
       import smart
-      model=smart._model(profile!='action' or mode=='deep')
+      model=smart._model(b.get('mode') in ('balanced','deep'))
       if model:
        save(job,{'stage':f'Writing opening heading {i+1}/{len(found)}'})
        c['hook']=smart._heading(model,c['transcript'])
@@ -608,7 +614,7 @@ def start_make(b, previous=None):
      c['highlight_words']=[roman_text(w) for w in c.get('highlight_words') or []];c['description']=roman_text(c.get('description',''))
      if c.get('words') and any(DEVA_RX.search(str(w.get('text',''))) for w in c['words']):lang='hinglish'     # YouTube gave Hindi script although another language was picked
     body={'id':sid2,'start':start,'end':end,'layout':layout_use,'top':(top_h if isinstance(top_h,(int,float)) and .2<=top_h<=.5 else .32),'captions':True,'caption_style':style,'language':language,'hook':(' '.join(to_hinglish(w) for w in c.get('hook','').split()) if lang=='hinglish' else c.get('hook','')),
-          'aspect':b.get('aspect','vertical'),'resolution':b.get('resolution',1080),'fps':b.get('fps',0),'title':c.get('title',''),'post_caption':post_text(c),'punch_words':c.get('highlight_words') or [],'hashtags':c.get('hashtags') or [],'description':c.get('description',''),'batch_id':job,'source_url':url,'cam':cam_use,'game':game_use,'features':c.get('features'),'weights_used':W,'moment_profile':profile,'focus_brief':focus_brief,'focus_match':c.get('focus_match'),'visual_review':c.get('visual_review')}
+          'aspect':b.get('aspect','vertical'),'resolution':b.get('resolution',1080),'fps':b.get('fps',0),'title':c.get('title',''),'viral_score':min(99,c.get('score') or 0),'viral_parts':c.get('parts') or {},'post_caption':post_text(c),'punch_words':c.get('highlight_words') or [],'hashtags':c.get('hashtags') or [],'description':c.get('description',''),'batch_id':job,'source_url':url,'cam':cam_use,'game':game_use,'features':c.get('features'),'weights_used':W,'moment_profile':profile,'focus_brief':focus_brief,'focus_match':c.get('focus_match'),'visual_review':c.get('visual_review')}
     if game_name:body['game_name']=game_name
     full_words=yt_words or checkpoint.get('source_info',{}).get('words') or []
     context_words=[]
