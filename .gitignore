@@ -67,3 +67,5 @@ __pycache__/
 !editor.css
 !capdraw.js
 !library.js
+!modes.js
+!modes.css
