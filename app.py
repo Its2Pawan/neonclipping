@@ -302,7 +302,7 @@ def start_make(b, previous=None):
     try:up=(info.get('channel') or info.get('uploader') or '') if url else ''
     except NameError:up=''
     return games.detect(b.get('game_name') if isinstance(b.get('game_name'),str) else '',title,up,'' if url else getattr(src0,'name',''))
-   fast=False;title='';yt_words=None;video_lang=''
+   fast=False;title='';yt_words=None;video_lang='';heat=None
    cached=previous and previous.get('plan')
    completed=previous.get('completed',{}) if cached else {}
    if cached:
@@ -312,7 +312,7 @@ def start_make(b, previous=None):
     save(job,{'engine':engine,'stage':'Resuming saved moments','candidates':len(found)})
    elif 'source_info' in checkpoint:
     src_info=checkpoint['source_info']
-    fast=src_info['fast'];video_lang=src_info['language'];title=src_info['title'];yt_words=src_info['words']
+    fast=src_info['fast'];video_lang=src_info['language'];title=src_info['title'];yt_words=src_info['words'];heat=src_info.get('heatmap')
     info={'uploader':src_info['uploader']}
    elif url:
     save(job,{'stage':'Reading video info','progress':.01})
@@ -326,7 +326,8 @@ def start_make(b, previous=None):
      from captions_yt import from_info
      yt_words=from_info(info);save(job,{'transcript_source':'YouTube captions' if yt_words else 'speech model'})
     except Exception:yt_words=None
-    checkpoint['source_info']={'fast':fast,'language':video_lang,'title':title,'words':yt_words,'uploader':info.get('channel') or info.get('uploader') or ''}
+    import replay;heat=replay.from_info(info)
+    checkpoint['source_info']={'heatmap':heat,'fast':fast,'language':video_lang,'title':title,'words':yt_words,'uploader':info.get('channel') or info.get('uploader') or ''}
     persist()
    if not cached and not url and src0:
     try:
@@ -422,7 +423,7 @@ def start_make(b, previous=None):
       if beat['live'] and time.monotonic()-beat['seen']>=4:save(job,{'stage':f'Finding moments in audio · working {int(time.monotonic()-t0)}s (long videos take a few minutes)'})
     threading.Thread(target=heartbeat,daemon=True).start()
     game_name,game_tags=detect_game()
-    try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name)
+    try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat)
     finally:beat['live']=False
     found=choose(found,lambda c:lowres_section(url,c))
     if not found:
@@ -435,7 +436,7 @@ def start_make(b, previous=None):
     else:sid,p=src0.stem,src0
     meta=probe(p);duration=meta['duration'];save(job,{'source_id':sid,'meta':meta,'stage':'Finding moments','progress':.1})
     game_name,game_tags=detect_game()
-    found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name)
+    found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat)
     found=choose(found,lambda c:(p,c['start']))
     if not found:
      checkpoint_path.unlink(missing_ok=True)
@@ -445,6 +446,7 @@ def start_make(b, previous=None):
     for c in found:
      seen=set();c['hashtags']=[x for x in list(game_tags)+list(c.get('hashtags') or []) if not (x.lower() in seen or seen.add(x.lower()))][:8]
     if game_name:save(job,{'game':game_name})
+   dropped_frozen=[]
    done=[];cam_use,game_use,cam_checked,layout_use=cam,game,not b.get('cam_auto',True),layout       # facecam search is on unless switched off
    if not cached:
     uploader=str((info.get('channel') or info.get('uploader') or '')) if url else ''
@@ -487,6 +489,12 @@ def start_make(b, previous=None):
     if sections:
      sid2=sections[i].result();real=section_start(p,DATA/(sid2+'.mp4'),max(0,c['start']-PAD));start=max(0,c['start']-real);end=min(_dur(DATA/(sid2+'.mp4')),start+c['end']-c['start']);words=c.get('words')
     else:sid2=sid;start=c['start'];end=c['end'];words=c.get('words')
+    if b.get('skip_frozen',True) is not False:      # 1E: ad break, BRB slate or frozen screen: not worth a clip
+     import frozen
+     still,share=frozen.is_frozen(DATA/(sid2+'.mp4'),start,end-start)
+     if still:
+      dropped_frozen.append({'start':c['start'],'end':c['end'],'frozen_share':round(share,2)});save(job,{'dropped_frozen':dropped_frozen,'stage':f'Skipped clip {i+1}: the picture is frozen (ad, BRB or loading screen)'})
+      continue
     if not cam_checked:
      cam_checked=True
      try:
