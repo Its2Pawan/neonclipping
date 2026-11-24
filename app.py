@@ -291,16 +291,20 @@ def axes(f):
 
 def ai_found(moments,yt_words,duration):
  """Candidates built from moments the user pasted from a chatbot (see aiparts.py) instead of the local finder."""
- import captions_yt
+ import captions_yt,thought
  out=[]
  for m in moments:
   try:s=float(m['start']);e=float(m['end'])
   except (KeyError,TypeError,ValueError):continue
   if not(math.isfinite(s) and math.isfinite(e)) or not 0<=s<e or s>=duration or e-s>180:continue
-  e=min(e,duration);w=captions_yt.window(yt_words,s,e) if yt_words else None
-  out.append({'start':s,'end':e,'score':50,'rank':.5,'title':str(m.get('title') or '')[:90],'hook':str(m.get('hook') or '')[:90],'words':w or None,'features':{'llm':.85},'reason':'Picked from your AI answer','language':None})
+  e=min(e,duration)
+  if m.get('snap') and yt_words:      # one time was given: start there, run the usual length, but finish the sentence
+   ext=captions_yt.window(yt_words,s,min(duration,e+8))
+   if ext:e=min(duration,s+thought.snap_end(ext,0,e-s,max(8,(e-s)*.6),min(180,(e-s)+8),duration-s))
+  w=captions_yt.window(yt_words,s,e) if yt_words else None
+  out.append({'start':s,'end':e,'score':50,'rank':.5,'title':str(m.get('title') or '')[:90],'hook':str(m.get('hook') or '')[:90],'transcript':' '.join(str(x['text']) for x in w) if w else '','words':w or None,'features':{'llm':.85},'reason':'The time you asked for' if 'snap' in m else 'Picked from your AI answer','language':None})
  if not out:raise RuntimeError('None of the pasted moments fit inside this video.')
- return out,'AI answer'
+ return out,('Your time' if any('snap' in m for m in moments) else 'AI answer')
 
 @app.post('/make')
 def make(b:dict):
@@ -328,6 +332,17 @@ def start_make(b, previous=None):
  if profile not in curation.PROFILES:raise HTTPException(400,'Choose Balanced, Action or Dialogue moments.')
  try:focus_brief,include_phrases,exclude_phrases=curation.focus_settings(b)
  except ValueError as error:raise HTTPException(400,str(error))
+ exact_time=False;part_window=None
+ if not moments:      # a time given on its own (focus box) or in 'Only a part of the video' (From/To) means THAT clip, not a hint
+  import intent as _intent
+  try:fs,ts=float(b.get('from_s')),float(b.get('to_s'))
+  except (TypeError,ValueError):fs=ts=None
+  asked=[]
+  if fs is not None and ts is not None and math.isfinite(fs) and math.isfinite(ts) and 0<=fs<ts:
+   if ts-fs<=180:asked=[{'start':fs,'end':ts,'snap':False}]
+   else:part_window=(fs,ts)      # a longer part: the finder works inside it
+  asked=asked or _intent.explicit(focus_brief,min_len,max_len)
+  if asked:moments=asked;count=min(24,len(moments));exact_time=True
  if not moments:
   from intent import requested_count
   count=requested_count(focus_brief,count)
@@ -490,7 +505,7 @@ def start_make(b, previous=None):
       if beat['live'] and time.monotonic()-beat['seen']>=4:save(job,{'stage':f'Finding moments in audio · working {int(time.monotonic()-t0)}s (long videos take a few minutes)'})
     threading.Thread(target=heartbeat,daemon=True).start()
     game_name,game_tags=detect_game();chat_sig=chat_ready()
-    try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig,whole=flags['whole_pass'] or b.get('whole_pass') is True,rerank_on=flags['rerank'],fair=flags['fair_order'],quality=b.get('mode') in ('balanced','deep'))
+    try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig,whole=flags['whole_pass'] or b.get('whole_pass') is True,rerank_on=flags['rerank'],fair=flags['fair_order'],quality=b.get('mode') in ('balanced','deep'),window=part_window)
     finally:beat['live']=False
     found=choose(found,lambda c:lowres_section(url,c))
     if not found:
@@ -503,7 +518,7 @@ def start_make(b, previous=None):
     else:sid,p=src0.stem,src0
     meta=probe(p);duration=meta['duration'];save(job,{'source_id':sid,'meta':meta,'stage':'Finding moments','phase':'analyze','progress':.1})
     game_name,game_tags=detect_game();chat_sig=chat_ready()
-    found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig,whole=flags['whole_pass'] or b.get('whole_pass') is True,rerank_on=flags['rerank'],fair=flags['fair_order'],quality=b.get('mode') in ('balanced','deep'))
+    found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig,whole=flags['whole_pass'] or b.get('whole_pass') is True,rerank_on=flags['rerank'],fair=flags['fair_order'],quality=b.get('mode') in ('balanced','deep'),window=part_window)
     found=choose(found,lambda c:(p,c['start']))
     if not found:
      checkpoint_path.unlink(missing_ok=True)
@@ -553,7 +568,7 @@ def start_make(b, previous=None):
      done.append(completed[str(i)]);save(job,{'clips':list(done)})
      continue
     save(job,{'stage':f'Preparing clip {i+1}/{len(found)}','phase':'prepare','clip_index':i+1})
-    if not moments and c.get('transcript') and b.get('hook_enabled') is not False and not (c.get('hook') and c.get('hook_evidence')):      # the judge's hook is already backed by a quote: no second AI call
+    if (not moments or exact_time) and c.get('transcript') and b.get('hook_enabled') is not False and not (c.get('hook') and c.get('hook_evidence')):      # the judge's hook is already backed by a quote: no second AI call
      try:
       import smart
       model=smart._model(b.get('mode') in ('balanced','deep'))

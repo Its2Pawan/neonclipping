@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-11-24
+- **A time you give now cuts exactly that clip.** Type only a time in the focus box (`1:35:00`, `1:35:00 to 1:36:00`, `5700s`, `1h35m`, `minute 95`) and that clip is made: a range as written, a single time from that second for the usual clip length, ending when the sentence ends. Add words (funny, chase) and the times stay hints. **Only a part of the video (From/To)** is now also used by **Make clips** (before, only Get preview used it, so From/To was ignored when you pressed Make clips directly): up to 3 minutes gives that exact clip, a longer part gives clips found inside it. `1h35m` and `1 hour 35 min` were read as two different times; fixed.
 - **Fast mode on very long videos:** reading a finished stream's chat no longer holds everything up (Fast waits at most 20 s for it; Balanced and Best wait longer). A 3.4 hour stream gave 3 clips in 4.3 minutes (before, the chat download alone could run 10+ minutes).
 - **Titles and hooks:** clips no longer all get the same title, and a hook that has to be taken from the transcript is the real quote, without a made-up lead-in.
 - **Automation (Settings, new tab):** a **watch folder** (drop a finished recording in it and clips are made by themselves, even overnight), a **webhook** that announces each finished clip (title, hook, score, hashtags; never the video), and **words to avoid**: a clip whose title, hook, description or captions contain one gets a red 'Check before posting' tag.

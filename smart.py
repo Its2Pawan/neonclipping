@@ -219,7 +219,7 @@ def snap(c,words,min_len,max_len,ext=None,source_end=None):
     duration=c['end']-c['start']
     words[:]=[dict(word,end=min(word['end'],duration)) for word in pool if 0<=word['start']<duration and word['end']>word['start']]
 
-def find(src,duration,count,length,report,language=None,data=None,min_len=None,motion=True,words=None,deep=False,weights=None,select=True,profile='balanced',brief='',includes=(),excludes=(),game=None,heat=None,chat=None,whole=False,rerank_on=True,fair=None,quality=None):
+def find(src,duration,count,length,report,language=None,data=None,min_len=None,motion=True,words=None,deep=False,weights=None,select=True,profile='balanced',brief='',includes=(),excludes=(),game=None,heat=None,chat=None,whole=False,rerank_on=True,fair=None,quality=None,window=None):
     """Return up to `count` clips, best first. Always returns `count` when the source is long enough."""
     pool=(count*4+2) if deep else (count*2+1 if count<6 else count+4)
     if not words:pool=count+2 if not deep else min(pool,count*2+2)      # no free transcript: every candidate costs a speech-model pass, so read fewer
@@ -245,6 +245,14 @@ def find(src,duration,count,length,report,language=None,data=None,min_len=None,m
     for a,b in direction['spans'][:4]:            # look inside every asked span even if nothing was loud there
         s=max(0,min(a+(b-a-length)/2,duration-length)) if b-a>length else max(0,min(a,duration-length));e=min(duration,s+length)
         if not any(min(e,c['end'])-max(s,c['start'])>.5*length for c in clips):clips.append({'start':round(s,2),'end':round(e,2),'title':'Asked moment','score':0,'reason':'Inside the time you asked for','status':'done','features':{}})
+    wa,wb=(max(0,window[0]),min(duration,window[1])) if window else (0,0)
+    if window and wb-wa>=5:      # 'Only a part of the video' (From/To): make sure the whole part is looked at, not only its loud peaks
+        clips=[c for c in clips if intent.inside(c,[(wa,wb)])>=.5]      # nothing outside the part is read (saves AI time)
+        s=wa
+        while s<wb-5 and len(clips)<pool+6:
+            e=min(wb,s+length)
+            if not any(min(e,c['end'])-max(s,c['start'])>.5*(e-s) for c in clips):clips.append({'start':round(s,2),'end':round(e,2),'title':'Moment in your part','score':0,'reason':'Inside the part you chose','status':'done','features':{}})
+            s+=length*.9
     # Fast mode reads moments with the quicker local model (llama3.2); the bigger one (gemma4) only in Balanced / Best.
     model=_model((deep or profile!='action') if quality is None else quality);engine='mixed activity + transcript'
     # 1C: the AI also reads the WHOLE transcript (Balanced / Deep). With Cloud AI any length; with a local model only up to 30 min,
@@ -297,6 +305,9 @@ def find(src,duration,count,length,report,language=None,data=None,min_len=None,m
     if model and rerank_on:      # 2D re-rank (one call); 4C reversed second reading in Best ('fair' tile)
         report(.96,'Comparing the best moments side by side')
         if rerank(clips,model,count,2 if (deep if fair is None else fair) else 1):engine+=' + head-to-head'
+    if window and wb-wa>=5:
+        inside_=[c for c in clips if intent.inside(c,[(wa,wb)])>=.5]
+        clips=inside_ or clips      # only clips from the chosen part (if the part has none, keep what we found)
     clips=sorted(clips,key=lambda c:-c['rank'])
     if select:clips=curation.select(clips,count,profile)
     return clips,engine
