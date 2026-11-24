@@ -16,7 +16,22 @@ _LEX = [
     (r"are+ yaar|arre+|are bhai|oye+|abe+|bhaag\w*|bhago|bachao|pulis|police wale|maar\w*|gaya|goli\w*|dhamaka|uff+|oh teri|kya baat|zabardast|pagal|mast|jhakaas|hat\s*teri", 2),
     (r"अरे+|भागो|भाग|बचाओ|पुलिस|मार|मर गया|गोली|धमाका|ब्लास्ट|पागल|उफ़|ओए|यार", 2),
 ]
+# 7A: game events said out loud (or read by the streamer): GTA, battle royale, shooters. Strong cues for a clip.
+GAME_EVENTS = [
+    (r"wasted|busted|mission (passed|failed|complete)|wanted level|(five|5|six|6) stars?|cops? (are )?coming|heist|bank robbery|getaway", 3),
+    (r"headshot|head shot|one tap|ace|clutch|(1|one) (v|vs) (\d|one|two|three|four)|squad wipe|wiped|knocked|eliminated|victory royale|chicken dinner|booyah|winner winner", 3),
+    (r"double kill|triple kill|quadra kill|penta kill|multi kill|killstreak|kill streak|last (one|man|zone)|final circle|zone", 2),
+    (r"वांटेड|बस्टेड|वेस्टेड|मिशन|हेडशॉट|बूयाह|क्लच", 3),
+]
+_LEX = _LEX + GAME_EVENTS
 _RX = [(re.compile(p, re.I), w) for p, w in _LEX]
+_EVENT_RX = re.compile('|'.join(p for p, _ in GAME_EVENTS), re.I)
+
+
+def game_events(words):
+    """Game event phrases spoken in a clip (for the reason line and the game-aware hook)."""
+    text = ' '.join(str(w.get('text', '')) for w in words or [])
+    return sorted({m.group(0).lower() for m in _EVENT_RX.finditer(text)})[:5]
 # short interjections: weak on their own (1 point), strong when repeated or combined ("oh oh what the holy")
 _WEAK = {'oh', 'ooh', 'whoa', 'woah', 'wow', 'yo', 'holy', 'damn', 'dang', 'ugh', 'aah', 'ahh', 'ah', 'bro', 'brother', 'nah', 'what', 'no', 'wait', 'stop', 'yes', 'yeah',
          'arre', 'are', 'abe', 'oye', 'uff', 'अरे', 'ओए', 'उफ़', 'वाह', 'नहीं'}

@@ -302,7 +302,7 @@ def start_make(b, previous=None):
     try:up=(info.get('channel') or info.get('uploader') or '') if url else ''
     except NameError:up=''
     return games.detect(b.get('game_name') if isinstance(b.get('game_name'),str) else '',title,up,'' if url else getattr(src0,'name',''))
-   fast=False;title='';yt_words=None;video_lang='';heat=None
+   fast=False;title='';yt_words=None;video_lang='';heat=None;chat_sig=None;chat_ready=lambda:None
    cached=previous and previous.get('plan')
    completed=previous.get('completed',{}) if cached else {}
    if cached:
@@ -327,6 +327,17 @@ def start_make(b, previous=None):
      yt_words=from_info(info);save(job,{'transcript_source':'YouTube captions' if yt_words else 'speech model'})
     except Exception:yt_words=None
     import replay;heat=replay.from_info(info)
+    if b.get('chat_replay',True) is not False and ('live_chat' in (info.get('subtitles') or {}) or 'twitch' in str(info.get('extractor','')).lower()):
+     import chat_replay      # 3C: the finished stream's chat (text only), read in the background while the audio downloads
+     chat_box={}
+     def read_chat(info=info):
+      rows=chat_replay.load(info,url,DATA)
+      chat_box['sig']=chat_replay.signals(rows,float(info.get('duration') or 0)) if rows else None
+      if rows:save(job,{'chat_messages':len(rows)})
+     chat_thread=threading.Thread(target=read_chat,daemon=True);chat_thread.start()
+     def chat_ready():
+      chat_thread.join(timeout=600);return chat_box.get('sig')
+    else:chat_ready=lambda:None
     checkpoint['source_info']={'heatmap':heat,'fast':fast,'language':video_lang,'title':title,'words':yt_words,'uploader':info.get('channel') or info.get('uploader') or ''}
     persist()
    if not cached and not url and src0:
@@ -422,8 +433,8 @@ def start_make(b, previous=None):
       time.sleep(4)
       if beat['live'] and time.monotonic()-beat['seen']>=4:save(job,{'stage':f'Finding moments in audio · working {int(time.monotonic()-t0)}s (long videos take a few minutes)'})
     threading.Thread(target=heartbeat,daemon=True).start()
-    game_name,game_tags=detect_game()
-    try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat)
+    game_name,game_tags=detect_game();chat_sig=chat_ready()
+    try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig)
     finally:beat['live']=False
     found=choose(found,lambda c:lowres_section(url,c))
     if not found:
@@ -435,8 +446,8 @@ def start_make(b, previous=None):
      save(job,{'stage':'Downloading source ('+quality_label(src_h)+')','progress':.02});sid,p=app.neon['download'](url,job,src_h)
     else:sid,p=src0.stem,src0
     meta=probe(p);duration=meta['duration'];save(job,{'source_id':sid,'meta':meta,'stage':'Finding moments','progress':.1})
-    game_name,game_tags=detect_game()
-    found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat)
+    game_name,game_tags=detect_game();chat_sig=chat_ready()
+    found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,lambda f,m:save(job,{'stage':m,'progress':.1+.5*f}),language,DATA,min_len,True,yt_words,mode=='deep',W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig)
     found=choose(found,lambda c:(p,c['start']))
     if not found:
      checkpoint_path.unlink(missing_ok=True)
@@ -594,7 +605,7 @@ def live_render(sess,start,dur,why,chat_feature):
  try:
   import numpy as np
   from highlights import _audio
-  rms,hf=_audio(out)
+  rms,hf=_audio(out)[:2]
   if len(rms)>4:
    base=float(np.median(rms))+1e-4;loud=float(min(1.0,max(0.0,(float(np.percentile(rms,95))/base-1.0)/3.0)))
  except Exception:pass

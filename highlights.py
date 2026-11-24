@@ -59,17 +59,42 @@ def _motion(source, duration, report):
     c = np.concatenate([parts[s][1] for s in starts]) if starts else np.zeros(0)
     return f, c
 
+def game_sounds(x, sr=8000):
+    """3A: bangs and bursts per second from the shape of the sound, no model: gunfire (several sharp onsets in a second),
+    explosions and crashes (a sudden jump of low-frequency energy). Judged against the video's own level, so a quiet streamer's
+    big play still shows. Returns (bursts, booms), raw per-second values (normalised later with _z)."""
+    hop = sr // 25                                     # 40 ms frames
+    n = len(x) // sr
+    if n == 0: return np.zeros(0), np.zeros(0)
+    onsets, booms = np.zeros(n), np.zeros(n)
+    win = np.hanning(hop)
+    for a in range(0, n, 600):                         # 10-minute pieces keep memory small on long streams
+        b = min(n, a + 600)
+        fr = x[a * sr:b * sr].reshape(-1, hop)
+        spec = np.abs(np.fft.rfft(fr * win, axis=1)) ** 2          # 25 Hz bins
+        total = np.log1p(spec.sum(1) * 1e3)
+        low = np.log1p(spec[:, 1:9].sum(1) * 1e3)                  # 25-200 Hz: explosions, crashes, bass hits
+        flux = np.maximum(0, np.diff(total, prepend=total[:1]))
+        jump = np.maximum(0, np.diff(low, prepend=low[:1]))
+        med, mad = np.median(flux), np.median(np.abs(flux - np.median(flux))) + 1e-6
+        hits = flux > med + 6 * mad
+        per = 25
+        onsets[a:b] = hits.reshape(-1, per).sum(1)
+        booms[a:b] = jump.reshape(-1, per).max(1)
+    return onsets, booms
+
 def _audio(source):
     cmd = ['ffmpeg', '-nostdin', '-v', 'error', '-i', str(source), '-vn', '-ac', '1', '-ar', '8000', '-f', 's16le', 'pipe:1']
     raw = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=4 * 3600).stdout
     x = np.frombuffer(raw[:len(raw) // 2 * 2], np.int16).astype(np.float32) / 32768
     n = len(x) // 8000
-    if n == 0: return np.zeros(0), np.zeros(0)
+    if n == 0: return np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0)
+    bursts, booms = game_sounds(x[:n * 8000])
     x = x[:n * 8000].reshape(n, 8000)
     rms = np.sqrt((x ** 2).mean(1))
     spec = np.abs(np.fft.rfft(x * np.hanning(8000), axis=1)) ** 2          # 1 Hz bins
     hf = spec[:, 2000:4000].sum(1) / (spec.sum(1) + 1e-9)
-    return rms, hf
+    return rms, hf, bursts, booms
 
 def _z(x, n, win=120):
     """Local z-score vs a rolling baseline, clipped to 0..1 (z of 3.5 = 1)."""
@@ -83,13 +108,14 @@ def _z(x, n, win=120):
 def rank(source, duration, count=4, length=30, report=lambda seconds: None, motion_on=True, extra=None):
     with ThreadPoolExecutor(max_workers=2) as pool:
         m = pool.submit(_motion, source, duration, report) if motion_on else pool.submit(lambda: (np.zeros(0), np.zeros(0))); a = pool.submit(_audio, source)
-        (flow, cuts), (rms, hf) = m.result(), a.result()
+        (flow, cuts), (rms, hf, bursts, booms) = m.result(), a.result()
     n = max(1, int(np.ceil(duration)))
     has_audio = len(rms) > 0
     motion = _z(flow, n); cut = _z(cuts, n)
     loud = _z(rms, n) if has_audio else np.zeros(n)
     shout = np.clip(_z(hf * rms, n) if has_audio else np.zeros(n), 0, 1)
-    sig = (.35 * motion + .30 * loud + .20 * shout + .15 * cut) if motion_on and has_audio else (.55 * loud + .45 * shout) if has_audio else (.7 * motion + .3 * cut)
+    bang = np.maximum(_z(bursts, n, 300), _z(booms, n, 300)) if has_audio else np.zeros(n)     # 3A: gunfire / explosion / crash shapes
+    sig = (.32 * motion + .26 * loud + .17 * shout + .12 * cut + .13 * bang) if motion_on and has_audio else (.45 * loud + .35 * shout + .20 * bang) if has_audio else (.7 * motion + .3 * cut)
     if extra is not None and len(extra):                 # what is SAID (exclamations) attracts candidates too
         e = np.zeros(n); e[:min(n, len(extra))] = extra[:n]
         sig = .75 * sig + .25 * e
@@ -98,13 +124,13 @@ def rank(source, duration, count=4, length=30, report=lambda seconds: None, moti
     for center in np.argsort(smooth)[::-1]:
         start = max(0, min(float(center) - length * .4, duration - length)); end = min(duration, start + length)
         if any(min(end, c['end']) - max(start, c['start']) > 0 for c in clips): continue
-        parts = {'motion': motion, 'audio jump': loud, 'shouting': shout, 'cuts': cut}
+        parts = {'motion': motion, 'audio jump': loud, 'shouting': shout, 'cuts': cut, 'game sounds': bang}
         lo, hi = int(start), max(int(start) + 1, int(end))
         top = sorted(parts, key=lambda k: -parts[k][int(center) - 3:int(center) + 4].mean() if len(parts[k]) else 0)[:2]
         clips.append({'start': round(start, 2), 'end': round(end, 2), 'title': f'Activity highlight {len(clips) + 1}',
                       'score': round(float(smooth[center]) * 100 / max(float(smooth.max()), 1e-6)),
                       'reason': 'Peak: ' + ' + '.join(top), 'status': 'done',
-                      'features': {'loud': float(loud[lo:hi].mean()) if has_audio else None, 'shout': float(shout[lo:hi].mean()) if has_audio else None,
+                      'features': {'bang': float(bang[lo:hi].max()) if has_audio else None, 'loud': float(loud[lo:hi].mean()) if has_audio else None, 'shout': float(shout[lo:hi].mean()) if has_audio else None,
                                    'motion': float(motion[lo:hi].mean()) if motion_on else None, 'cuts': float(cut[lo:hi].mean()) if motion_on else None}})
         if len(clips) >= count: break
     if not clips: clips = [{'start': 0, 'end': round(length, 2), 'title': 'Review source opening', 'score': 0, 'reason': 'No strong activity peak found', 'status': 'done'}]

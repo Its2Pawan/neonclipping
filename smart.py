@@ -189,7 +189,7 @@ def snap(c,words,min_len,max_len,ext=None,source_end=None):
     duration=c['end']-c['start']
     words[:]=[dict(word,end=min(word['end'],duration)) for word in pool if 0<=word['start']<duration and word['end']>word['start']]
 
-def find(src,duration,count,length,report,language=None,data=None,min_len=None,motion=True,words=None,deep=False,weights=None,select=True,profile='balanced',brief='',includes=(),excludes=(),game=None,heat=None):
+def find(src,duration,count,length,report,language=None,data=None,min_len=None,motion=True,words=None,deep=False,weights=None,select=True,profile='balanced',brief='',includes=(),excludes=(),game=None,heat=None,chat=None):
     """Return up to `count` clips, best first. Always returns `count` when the source is long enough."""
     pool=(count*4+2) if deep else (count*2+1 if count<6 else count+4)
     if not words:pool=count+2 if not deep else min(pool,count*2+2)      # no free transcript: every candidate costs a speech-model pass, so read fewer
@@ -197,6 +197,10 @@ def find(src,duration,count,length,report,language=None,data=None,min_len=None,m
     import replay
     replayed=replay.per_second(heat,duration)      # 3D: YouTube Most replayed, when the video has it
     if replayed is not None:extra=replayed if extra is None else .5*extra[:len(replayed)]+.5*replayed[:len(extra)]
+    import chat_replay
+    if chat and chat.get('heat') is not None and len(chat['heat']):      # 3C: chat replay bursts (unique people) attract candidates
+        h=np.zeros(int(np.ceil(duration)));h[:min(len(h),len(chat['heat']))]=chat['heat'][:len(h)]
+        extra=h if extra is None else np.maximum(extra[:len(h)],h[:len(extra)]*.9)
     weights=weights or curation.profile_weights(learn.DEFAULT,profile)
     while length>=10:
         clips=rank(src,duration,pool,length,lambda s:report(.0+.3*s/max(duration,1),f'Scanning movement + audio: {int(s)}/{int(duration)}s'),motion,extra)
@@ -226,6 +230,8 @@ def find(src,duration,count,length,report,language=None,data=None,min_len=None,m
             if not curation.passes_filters(text,includes,excludes):c['excluded']=True;continue
             c['focus_match']=curation.focus_match(brief,text) if brief else None
             c.setdefault('features',{})['words']=excite.window_score(c['words'],c['end']-c['start'])
+            events=excite.game_events(c['words'])
+            if events:c['game_events']=events;c['reason']=(c.get('reason') or '')+' · game: '+', '.join(events)
             if len(text.split())<4:c['reason']='Mostly gameplay audio';c['llm']=2;c['features']['llm']=.2;continue
             if model:
                 ctx=text
@@ -239,6 +245,9 @@ def find(src,duration,count,length,report,language=None,data=None,min_len=None,m
     for c in clips:
         c.setdefault('features',{}).setdefault('words',None)
         if replayed is not None:c['features']['replay']=replay.window(replayed,c['start'],c['end'])
+        if chat:
+            c['features']['chat'],c['chat_kind']=chat_replay.describe(chat,c['start'],c['end'])
+            if c.get('chat_kind'):c['reason']=(c.get('reason') or '')+' · chat: '+c['chat_kind']
         c['rank']=curation.focus_rank(learn.score(c['features'],weights),c.get('focus_match'))+intent.boost(c,direction)
         c['score']=min(99,round(c['rank']*100))
     if model:      # 2D re-rank (all modes, one call); 4C reversed second reading in Deep

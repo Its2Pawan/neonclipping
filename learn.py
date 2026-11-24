@@ -12,8 +12,8 @@ import threading
 from pathlib import Path
 import numpy as np
 
-FEATURES = ['loud', 'shout', 'words', 'motion', 'flash', 'strobe', 'cuts', 'llm', 'chat', 'replay']
-DEFAULT = {'loud': .17, 'shout': .13, 'words': .20, 'motion': .17, 'flash': .08, 'strobe': .04, 'cuts': .03, 'llm': .18, 'chat': .14, 'replay': .16}   # replay: YouTube Most replayed (replay.py)
+FEATURES = ['loud', 'shout', 'words', 'motion', 'flash', 'strobe', 'cuts', 'llm', 'chat', 'replay', 'bang']
+DEFAULT = {'loud': .17, 'shout': .13, 'words': .20, 'motion': .17, 'flash': .08, 'strobe': .04, 'cuts': .03, 'llm': .18, 'chat': .14, 'replay': .16, 'bang': .12}   # replay: YouTube Most replayed (replay.py)
 MIN_RATINGS = 8
 LOCK=threading.RLock()
 
