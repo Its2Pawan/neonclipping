@@ -259,9 +259,9 @@ def start_export(b,job=None,auto_source='export'):
    (DATA/(job+'.json')).write_text(json.dumps({'source':id,'settings':{**b,**saved_text,'words':words},'result':finished},indent=2),encoding='utf-8')
    state[job]=finished
    if auto_source:
-    import social, automation
-    clip_info={'file':job,'title':saved_text.get('title') or b.get('title') or 'NeonClipping clip','description':saved_text.get('post_caption') or b.get('post_caption') or '','hashtags':b.get('hashtags') or [],'score':b.get('viral_score'),'flags':automation.check_clip([saved_text.get('title'),saved_text.get('hook'),saved_text.get('post_caption'),' '.join(str(w.get('text','')) for w in words)])}
-    social.auto_queue_clip(app,DATA,clip_info,source=auto_source)
+    import social as _social, automation as _automation
+    clip_info={'file':job,'title':saved_text.get('title') or b.get('title') or 'NeonClipping clip','description':saved_text.get('post_caption') or b.get('post_caption') or '','hashtags':b.get('hashtags') or [],'score':b.get('viral_score'),'flags':_automation.check_clip([saved_text.get('title'),saved_text.get('hook'),saved_text.get('post_caption'),' '.join(str(w.get('text','')) for w in words)])}
+    _social.auto_queue_clip(app,DATA,clip_info,source=auto_source)
   except Exception as e:
    import friendly;plain,original=friendly.explain(str(e)[-900:]);state[job]={'status':'error','error':plain,'error_detail':original}
  threading.Thread(target=work,daemon=True).start();return {'job':job}
@@ -585,6 +585,7 @@ def start_make(b, previous=None):
     pool=ThreadPoolExecutor(max_workers=3);sections=[pool.submit(section,i,c) if not finished(i) else None for i,c in enumerate(found)]
    for i,c in enumerate(found):
     if finished(i):
+     used_titles_.add(str(completed[str(i)].get('title') or '').strip().casefold())
      done.append(completed[str(i)]);save(job,{'clips':list(done)})
      continue
     save(job,{'stage':f'Preparing clip {i+1}/{len(found)}','phase':'prepare','clip_index':i+1})
@@ -699,19 +700,21 @@ def start_make(b, previous=None):
      ej=start_export(body,ej,auto_source=None)['job']
      while state.get(ej,{}).get('status')=='running':time.sleep(.7)
      r=state[ej]
-    import automation, social      # 5H: words-to-avoid check, webhook, and optional auto-upload
-    flags_=automation.check_clip([c.get('title'),c.get('hook'),c.get('description'),' '.join(str(w.get('text','')) for w in (body.get('words') or []))])
+    import automation as _automation, social as _social      # 5H: words-to-avoid check, webhook, and optional auto-upload
+    flags_=_automation.check_clip([c.get('title'),c.get('hook'),c.get('description'),' '.join(str(w.get('text','')) for w in (body.get('words') or []))])
     done.append({'flags':flags_,'caption_fixes':c.get('caption_fixes',0),'hashtags':c.get('hashtags') or [],'description':c.get('description',''),'punch_words':c.get('highlight_words') or [],'parts':c.get('parts') or {},'viral':min(99,c['score']),'axes':axes(c.get('features') or {}),'file':ej,'start':c['start'],'end':c['end'],'title':c.get('title') or 'Clip %d'%(i+1),'hook':c.get('hook',''),'score':c['score'],'reason':c.get('reason',''),'review_reason':c.get('review_reason',''),
                  'error':r.get('error'),'srt':r.get('srt'),'visual_review':c.get('visual_review')})
     if r.get('status')=='done':
      completed[str(i)]=done[-1]
      persist()
-     automation.notify(DATA,done[-1])
-     social.auto_queue_clip(app,DATA,done[-1],source='make')
+     _automation.notify(DATA,done[-1])
+     _social.auto_queue_clip(app,DATA,done[-1],source='make')
     save(job,{'clips':list(done),'stage':f'Rendered {i+1}/{len(found)}','progress':.6+.4*(i+1)/len(found)})
    if any(item.get('error') for item in done):
     raise RuntimeError('Some clips failed. Resume this batch to retry the missing clips.')
    checkpoint_path.unlink(missing_ok=True)
+   for prev_id in checkpoint.get('_chain') or []:
+    if isinstance(prev_id,str) and prev_id.isalnum():(DATA/(prev_id+'.resume.json')).unlink(missing_ok=True)
    save(job,{'status':'done','stage':'Clips ready','phase':'complete','progress':1,'elapsed_seconds':round(time.monotonic()-began,1)})
   except Exception as e:      # plain words for the common failures (private video, no internet, disk full, FFmpeg missing...)
    import friendly;plain,original=friendly.explain(str(e)[-600:]);save(job,{'status':'error','error':plain,'error_detail':original})
@@ -896,23 +899,51 @@ def restore_frozen(job:str,index:int,body:dict):
   app.neon['save'](job,{'restored':restored})
   return {'job':child}
 
+def _resolve_resume_chain(job):
+ seen={job}
+ record=state.get(job,{})
+ while record.get('resumed_as') and record['resumed_as'] in state and record['resumed_as'] not in seen:
+  next_job=record['resumed_as']
+  seen.add(next_job)
+  job=next_job;record=state[job]
+ return job,record
+
+def _job_resumable(job,record):
+ if record.get('status')!='error':return False
+ path=DATA/(job+'.resume.json') if len(job)==32 and job.isalnum() else None
+ if not path or not path.is_file():return False
+ try:
+  prev=json.loads(path.read_text(encoding='utf-8'))
+  if prev.get('plan') and not (DATA/prev['plan']['media']).is_file():return False
+ except (OSError,ValueError,KeyError):return False
+ return True
+
+@app.get('/make/resumable')
+def latest_resumable():
+ files=sorted(DATA.glob('*.resume.json'),key=lambda p:p.stat().st_mtime,reverse=True)
+ for f in files:
+  jid=f.name.split('.')[0]
+  if len(jid)!=32 or not jid.isalnum():continue
+  term_id,term_rec=_resolve_resume_chain(jid)
+  if _job_resumable(term_id,term_rec):
+   return {'job':term_id,'title':term_rec.get('title') or (term_rec.get('source') or {}).get('url') or 'Interrupted batch','stage':term_rec.get('stage') or ''}
+ return {'job':None}
+
 @app.post('/make/{job}/resume')
 def resume_make(job:str):
  with resume_lock:
-  record=state.get(job,{})
-  while record.get('resumed_as') and record['resumed_as'] in state:
-   next_job=record['resumed_as']
-   if state[next_job].get('status')!='error' or not (DATA/(next_job+'.resume.json')).is_file():break
-   job=next_job;record=state[job]
-  successor=record.get('resumed_as')
-  if successor and state.get(successor,{}).get('status') in ('running','done'):
-   return {'job':successor}
+  job,record=_resolve_resume_chain(job)
+  if record.get('status') in ('running','done'):
+   return {'job':job}
   path=DATA/(job+'.resume.json') if len(job)==32 and job.isalnum() else None
   if record.get('status')!='error' or not path or not path.is_file():
    raise HTTPException(409,'No interrupted analysis checkpoint is available.')
   previous=json.loads(path.read_text(encoding='utf-8'))
   if previous.get('plan') and not (DATA/previous['plan']['media']).is_file():
    raise HTTPException(409,'The cached source is missing. Start a new batch.')
+  chain=list(previous.get('_chain') or [])
+  if job not in chain:chain.append(job)
+  previous['_chain']=chain
   started=start_make(previous['request'],previous)
   app.neon['save'](job,{'resumed_as':started['job']})
   return started
@@ -920,7 +951,9 @@ def resume_make(job:str):
 @app.get('/make/{job}')
 def make_status(job:str):
  if job not in state:raise HTTPException(404,'Job unavailable after restart. Please retry.')
- return {**report.note_job_error(state[job]),'can_resume':state[job].get('status')=='error' and (DATA/(job+'.resume.json')).is_file()}
+ term_id,term_rec=_resolve_resume_chain(job)
+ can_resume=_job_resumable(term_id,term_rec)
+ return {**report.note_job_error(state[job]),'can_resume':can_resume,'resume_job':term_id if can_resume else None}
 @app.get('/status/{id}')
 def status(id:str):return report.note_job_error(state.get(id,{'status':'error','error':'Server restarted. Paste the link again to retry.'}))
 

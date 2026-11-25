@@ -313,3 +313,76 @@ class MultiPlatformAndAutoUpload(unittest.TestCase):
                         self.assertEqual(len([r for r in batch.json()["results"] if r["ok"]]), 3)
             finally:
                 app.processing_queue.close()
+
+    def test_start_make_and_resume_interrupted_batch(self):
+        import os
+        import subprocess
+        import time
+        from fastapi.testclient import TestClient
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            old_dir = os.environ.get("NEONCLIPPING_DATA_DIR")
+            os.environ["NEONCLIPPING_DATA_DIR"] = tmp
+            try:
+                import importlib
+                import app as A
+                importlib.reload(A)
+                src_id = "f" * 32
+                src_path = Path(tmp) / (src_id + ".mp4")
+                subprocess.run(
+                    [
+                        "ffmpeg", "-nostdin", "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=12",
+                        "-f", "lavfi", "-i", "sine=frequency=440", "-t", "6",
+                        "-c:v", "libx264", "-c:a", "aac", str(src_path),
+                    ],
+                    check=True,
+                )
+                orig_export = A.start_export
+                calls = []
+
+                def fail_once(body, job=None, auto_source="export"):
+                    calls.append(job)
+                    if len(calls) == 1:
+                        A.state[job] = {"status": "error", "error": "interrupted test"}
+                        return {"job": job}
+                    return orig_export(body, job, auto_source=auto_source)
+
+                import transcripts
+                words = [{"text": "hello", "start": i + 0.05, "end": i + 0.35} for i in range(6)]
+                with TestClient(A.app) as client, patch.object(transcripts, "cached_source", return_value=words):
+                    with patch.object(A, "start_export", side_effect=fail_once):
+                        started = client.post(
+                            "/make",
+                            json={"id": src_id, "cam_auto": False, "resolution": 720, "moments": [{"start": 0, "end": 2}]},
+                        )
+                        self.assertEqual(started.status_code, 200)
+                        orig_job = started.json()["job"]
+                        deadline = time.monotonic() + 30
+                        while time.monotonic() < deadline:
+                            st = client.get(f"/make/{orig_job}").json()
+                            if st["status"] != "running":
+                                break
+                            time.sleep(0.1)
+                        self.assertEqual(st["status"], "error", st)
+                        self.assertNotIn("local variable", st.get("error", ""))
+                        self.assertTrue(st["can_resume"])
+                        self.assertEqual(client.get("/make/resumable").json()["job"], orig_job)
+
+                    resumed = client.post(f"/make/{orig_job}/resume")
+                    self.assertEqual(resumed.status_code, 200)
+                    res_job = resumed.json()["job"]
+                    deadline = time.monotonic() + 60
+                    while time.monotonic() < deadline:
+                        fin = client.get(f"/make/{res_job}").json()
+                        if fin["status"] != "running":
+                            break
+                        time.sleep(0.1)
+                    self.assertEqual(fin["status"], "done", fin)
+                    self.assertFalse(client.get(f"/make/{orig_job}").json()["can_resume"])
+                    self.assertIsNone(client.get("/make/resumable").json()["job"])
+            finally:
+                if old_dir is None:
+                    os.environ.pop("NEONCLIPPING_DATA_DIR", None)
+                else:
+                    os.environ["NEONCLIPPING_DATA_DIR"] = old_dir
