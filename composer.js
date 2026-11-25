@@ -130,6 +130,7 @@
         (num('count') || '4') + ' clips',
         (num('minlen') || '30') + '–' + (num('length') || '60') + ' s',
         select('srcq'),
+        select('language') || 'Auto language',
         pick('[data-layout].active b') || 'auto layout',
         $('captions') && !$('captions').checked ? 'no captions' : (pick('.caption-choice.active b') || 'GTA Neon') + ' captions',
         select('hook-style') ? select('hook-style') + ' heading' : '',

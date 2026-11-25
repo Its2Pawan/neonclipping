@@ -96,7 +96,7 @@ class PhoneGate(unittest.TestCase):
 
 class PhoneOff(unittest.TestCase):
     def test_everything_is_closed_for_other_machines_when_lan_mode_is_off(self):
-        os.environ.pop('NEONCLIPPING_LAN', None)
+        os.environ['NEONCLIPPING_LAN'] = '0'
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             os.environ['NEONCLIPPING_DATA_DIR'] = d
             import importlib
@@ -107,7 +107,94 @@ class PhoneOff(unittest.TestCase):
             for p in ('/m', '/library', '/live-active'):
                 self.assertEqual(phone.get(p).status_code, 403, p)
             self.assertFalse(TestClient(A.app, client=('127.0.0.1', 1)).get('/phone/status').json()['enabled'])
+            self.assertEqual(A.host_binding(), '127.0.0.1')
             os.environ.pop('NEONCLIPPING_DATA_DIR', None)
+            os.environ.pop('NEONCLIPPING_LAN', None)
+
+
+class DefaultsAndCloudflareShare(unittest.TestCase):
+    def test_default_binds_0000_and_redirects_remote_root_to_mobile(self):
+        old_lan = os.environ.pop('NEONCLIPPING_LAN', None)
+        old_host = os.environ.pop('NEONCLIPPING_HOST', None)
+        try:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+                os.environ['NEONCLIPPING_DATA_DIR'] = d
+                import importlib
+                import app as A
+                importlib.reload(A)
+                from fastapi.testclient import TestClient
+                self.assertEqual(A.host_binding(), '0.0.0.0')
+                self.assertTrue(TestClient(A.app, client=('127.0.0.1', 1)).get('/phone/status').json()['enabled'])
+                remote = TestClient(A.app, client=('192.168.1.88', 40000))
+                r = remote.get('/', follow_redirects=False)
+                self.assertEqual(r.status_code, 307)
+                self.assertEqual(r.headers.get('location'), '/m')
+                # Proxied requests (e.g. Cloudflare Tunnel) arriving from 127.0.0.1 must still require PIN
+                tunneled = TestClient(A.app, client=('127.0.0.1', 40001))
+                self.assertEqual(
+                    tunneled.get('/library', headers={'CF-Connecting-IP': '203.0.113.5', 'Host': 'demo.trycloudflare.com'}).status_code,
+                    401,
+                )
+                self.assertEqual(
+                    tunneled.get('/share/status', headers={'CF-Connecting-IP': '203.0.113.5', 'Host': 'demo.trycloudflare.com'}).status_code,
+                    403,
+                )
+                pc = TestClient(A.app, client=('127.0.0.1', 40009))
+                langs = pc.get('/languages')
+                self.assertEqual(langs.status_code, 200)
+                self.assertIn('hinglish', langs.json()['special'])
+                self.assertEqual(pc.get('/assets/i18n.js').status_code, 200)
+        finally:
+            os.environ.pop('NEONCLIPPING_DATA_DIR', None)
+            if old_lan is not None:
+                os.environ['NEONCLIPPING_LAN'] = old_lan
+            if old_host is not None:
+                os.environ['NEONCLIPPING_HOST'] = old_host
+
+    def test_cloudflare_share_asks_before_install_and_starts_tunnel(self):
+        from unittest.mock import Mock, patch
+        import io
+        import share as S
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            os.environ['NEONCLIPPING_DATA_DIR'] = d
+            import importlib
+            import app as A
+            importlib.reload(A)
+            from fastapi.testclient import TestClient
+            pc = TestClient(A.app, client=('127.0.0.1', 40002))
+            try:
+                with patch.object(S, 'find_cloudflared', return_value=None):
+                    st = pc.get('/share/status').json()
+                    self.assertFalse(st['installed'])
+                    # Starting before install returns 409 asking for install confirmation
+                    self.assertEqual(pc.post('/share/start').status_code, 409)
+                    # Installing without confirm=True is rejected
+                    self.assertEqual(pc.post('/share/install', json={}).status_code, 400)
+
+                fake_bin = Path(d) / 'bin' / S._bin_name()
+                fake_resp = Mock()
+                fake_resp.__enter__ = lambda s: io.BytesIO(b'#!/bin/sh\necho cloudflared\n')
+                fake_resp.__exit__ = lambda s, *a: False
+                with patch('shutil.which', return_value=None), patch.object(S, '_download_spec', return_value=('https://example.org/cloudflared', 'raw')), patch.object(S, 'urlopen', return_value=fake_resp), patch('subprocess.run', return_value=Mock(returncode=0)):
+                    res = pc.post('/share/install', json={'confirm': True})
+                    self.assertEqual(res.status_code, 200)
+                    self.assertTrue(res.json()['installed'])
+                    self.assertTrue(fake_bin.is_file())
+
+                fake_proc = Mock()
+                fake_proc.poll.return_value = None
+                fake_proc.stdout = io.StringIO('2026-11-25 INF +---+\n2026-11-25 INF https://neon-demo-123.trycloudflare.com\n')
+                with patch('subprocess.Popen', return_value=fake_proc):
+                    started = pc.post('/share/start')
+                    self.assertEqual(started.status_code, 200)
+                    self.assertTrue(started.json()['running'])
+                    self.assertEqual(started.json()['url'], 'https://neon-demo-123.trycloudflare.com/m')
+                    stopped = pc.post('/share/stop')
+                    self.assertEqual(stopped.status_code, 200)
+                    self.assertFalse(stopped.json()['running'])
+            finally:
+                S.stop_tunnel()
+                os.environ.pop('NEONCLIPPING_DATA_DIR', None)
 
 
 class Helpers(unittest.TestCase):

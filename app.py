@@ -32,7 +32,12 @@ DATA=Path(os.environ.get('NEONCLIPPING_DATA_DIR',str(ROOT/'data'))).resolve();DA
 @asynccontextmanager
 async def lifespan(application):
  try:yield
- finally:application.processing_queue.close()
+ finally:
+  application.processing_queue.close()
+  try:
+   import share
+   share.stop_tunnel()
+  except Exception:pass
 
 app=FastAPI(lifespan=lifespan)
 state={}
@@ -80,8 +85,11 @@ def cover_image(id:str):
  return FileResponse(path,media_type='image/jpeg')
 @app.get('/assets/{name}')
 def assets(name:str):
- if name not in ('app.js','style.css','extras.js','transcripts.js','vision.js','report.js','studio.js','composer.js','composer.css','sidebar.js','library.js','right-bar.js','right-bar.css','editor.js','editor.css','capdraw.js','modes.js','modes.css','campaigns.js','campaigns.css','youtube-feed.js','youtube-feed.css'):raise HTTPException(404)
+ if name not in ('app.js','style.css','extras.js','transcripts.js','vision.js','report.js','studio.js','composer.js','composer.css','sidebar.js','library.js','right-bar.js','right-bar.css','editor.js','editor.css','capdraw.js','modes.js','modes.css','campaigns.js','campaigns.css','youtube-feed.js','youtube-feed.css','i18n.js'):raise HTTPException(404)
  return FileResponse(ROOT/name)
+@app.get('/languages')
+def list_languages():
+ return {'special':languages.SPECIAL,'base':list(languages.BASE),'more':[{'code':c,'spoken':s,'english':e} for c,s,e in languages.MORE]}
 @app.get('/text/{id}/{kind}')
 def text_file(id:str,kind:str):
  if not id.isalnum() or kind not in ('srt','ass','vtt'):raise HTTPException(404)
@@ -134,7 +142,7 @@ def caption_job(b:dict):
 def export(b:dict):
  return start_export(b)
 
-def start_export(b,job=None):
+def start_export(b,job=None,auto_source='export'):
  id,src,m,start,end=source_range(b)
  layout=b.get('layout','stack')
  if layout not in {x[0] for x in CATALOG}:raise HTTPException(400,'Choose a valid layout.')
@@ -250,6 +258,10 @@ def start_export(b,job=None):
    finished={'status':'done','file':job,'meta':probe(out),'encoder':encoder[1],'caption_words':len(visible_words),'srt':f'/text/{job}/srt' if visible_words else None}
    (DATA/(job+'.json')).write_text(json.dumps({'source':id,'settings':{**b,**saved_text,'words':words},'result':finished},indent=2),encoding='utf-8')
    state[job]=finished
+   if auto_source:
+    import social, automation
+    clip_info={'file':job,'title':saved_text.get('title') or b.get('title') or 'NeonClipping clip','description':saved_text.get('post_caption') or b.get('post_caption') or '','hashtags':b.get('hashtags') or [],'score':b.get('viral_score'),'flags':automation.check_clip([saved_text.get('title'),saved_text.get('hook'),saved_text.get('post_caption'),' '.join(str(w.get('text','')) for w in words)])}
+    social.auto_queue_clip(app,DATA,clip_info,source=auto_source)
   except Exception as e:
    import friendly;plain,original=friendly.explain(str(e)[-900:]);state[job]={'status':'error','error':plain,'error_detail':original}
  threading.Thread(target=work,daemon=True).start();return {'job':job}
@@ -684,10 +696,10 @@ def start_make(b, previous=None):
      if saved.get('result',{}).get('status')=='done':r=saved['result']
     if r is None:
      save(job,{'stage':f'Exporting clip {i+1}/{len(found)}','phase':'render'})
-     ej=start_export(body,ej)['job']
+     ej=start_export(body,ej,auto_source=None)['job']
      while state.get(ej,{}).get('status')=='running':time.sleep(.7)
      r=state[ej]
-    import automation      # 5H: words-to-avoid check and webhook
+    import automation, social      # 5H: words-to-avoid check, webhook, and optional auto-upload
     flags_=automation.check_clip([c.get('title'),c.get('hook'),c.get('description'),' '.join(str(w.get('text','')) for w in (body.get('words') or []))])
     done.append({'flags':flags_,'caption_fixes':c.get('caption_fixes',0),'hashtags':c.get('hashtags') or [],'description':c.get('description',''),'punch_words':c.get('highlight_words') or [],'parts':c.get('parts') or {},'viral':min(99,c['score']),'axes':axes(c.get('features') or {}),'file':ej,'start':c['start'],'end':c['end'],'title':c.get('title') or 'Clip %d'%(i+1),'hook':c.get('hook',''),'score':c['score'],'reason':c.get('reason',''),'review_reason':c.get('review_reason',''),
                  'error':r.get('error'),'srt':r.get('srt'),'visual_review':c.get('visual_review')})
@@ -695,6 +707,7 @@ def start_make(b, previous=None):
      completed[str(i)]=done[-1]
      persist()
      automation.notify(DATA,done[-1])
+     social.auto_queue_clip(app,DATA,done[-1],source='make')
     save(job,{'clips':list(done),'stage':f'Rendered {i+1}/{len(found)}','progress':.6+.4*(i+1)/len(found)})
    if any(item.get('error') for item in done):
     raise RuntimeError('Some clips failed. Resume this batch to retry the missing clips.')
@@ -750,11 +763,14 @@ def live_render(sess,start,dur,why,chat_feature):
  for k in styling.KEYS+brands.KEYS+hooks.KEYS:
   if o.get(k) not in (None,''):body[k]=o[k]
  lap('score')
- ej=export(body)['job']
+ ej=start_export(body,auto_source=None)['job']
  while state.get(ej,{}).get('status')=='running':time.sleep(.3)
  r=state[ej]
  if r.get('error'):raise RuntimeError(r['error'])
  lap('render')
+ import automation as _auto, social as _social
+ _live_flags=_auto.check_clip([title,hook,text])
+ _social.auto_queue_clip(app,DATA,{'file':ej,'title':title,'hook':hook,'score':viral,'flags':_live_flags},source='live')
  return {'secs':T,'file':ej,'title':title,'hook':hook,'why':why,'viral':viral,'axes':axes(feats),'at':int(sess.now()),'reason':why,'start':round(start),'end':round(start+real)}
 
 def start_live(target,opts,creator=None,before=24,after=14):
@@ -1036,6 +1052,8 @@ jobs.attach(app,DATA,state,{'make':make,'export':export,'transcribe':caption_job
 styling.attach(app,DATA)
 import phone
 phone.attach(app,DATA,ROOT)
+import share
+share.attach(app,DATA,ROOT)
 import subtitles,facecam_detect,aiparts
 subtitles.attach(app)
 aiparts.attach(app)
@@ -1061,8 +1079,15 @@ timeline.attach(app,DATA,state,probe)
 import studio_plans
 studio_plans.attach(app,DATA,probe)
 
+def host_binding():
+ lan=os.environ.get('NEONCLIPPING_LAN','1')!='0'
+ return os.environ.get('NEONCLIPPING_HOST') or ('0.0.0.0' if lan else '127.0.0.1')
+
 if __name__=='__main__':
- lan=os.environ.get('NEONCLIPPING_LAN')=='1'      # phone remote: listen on the home network (PIN required, see phone.py); default is this PC only
+ host=host_binding()
+ port=int(os.environ.get('NEONCLIPPING_PORT','8770'))
+ lan=os.environ.get('NEONCLIPPING_LAN','1')!='0'
+ print(f'NeonClipping listening on http://{host}:{port} (local: http://127.0.0.1:{port})')
  if lan:
-  import phone as _ph;print('Phone access ON. Open one of these on your phone (same Wi-Fi):',', '.join(f"http://{ip}:{os.environ.get('NEONCLIPPING_PORT','8770')}/m" for ip in _ph.lan_ips()) or '(no Wi-Fi address found)')
- uvicorn.run(app,host='0.0.0.0' if lan else '127.0.0.1',port=int(os.environ.get('NEONCLIPPING_PORT','8770')))
+  import phone as _ph;print('Every-device access ON. Open on phone / tablet / other devices (same Wi-Fi):',', '.join(f"http://{ip}:{port}/m" for ip in _ph.lan_ips()) or '(no Wi-Fi address found)')
+ uvicorn.run(app,host=host,port=port)
