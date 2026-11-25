@@ -255,26 +255,29 @@
         if (!p.enabled) {
           phoneBox.innerHTML = '📱 <b>Other-device access is off</b> (started with <code>NEONCLIPPING_LAN=0</code>). Restart without <code>NEONCLIPPING_LAN=0</code> to use phones, tablets and laptops on <code>0.0.0.0</code>.';
         } else {
-          const urls = p.urls.length ? p.urls.map(u => '<b>' + u + '</b>').join(' or ') : '(no Wi-Fi address found)';
-          let html = '📱 <b>All devices ON (0.0.0.0:' + p.port + ').</b> Open on phone, tablet or another PC (same Wi-Fi): ' + urls +
-            ' · PIN <b style="color:var(--lime);font-size:18px;letter-spacing:.1em">' + p.pin + '</b> <button class="secondary" id="phone-newpin" style="margin-left:8px;padding:4px 10px">New PIN</button>';
+          const urls = p.urls.length ? p.urls.map(u => '<b>' + u + '</b>').join(' or ') : '(use this device IP:' + p.port + ')';
+          let html = '📱 <b>All devices ON (0.0.0.0:' + p.port + ').</b> Open on phone, tablet or another PC: ' + urls;
+          if (p.pin_required && p.pin) {
+            html += ' · PIN <b style="color:var(--lime);font-size:18px;letter-spacing:.1em">' + p.pin + '</b> <button class="secondary" id="phone-newpin" style="margin-left:8px;padding:4px 10px">New PIN</button>';
+          } else {
+            html += ' <span class="muted">(full UI, no PIN)</span>';
+          }
           if (sh) {
             if (sh.running && sh.url) {
-              html += '<br>🌐 <b>Public share ON (Cloudflare):</b> <a href="' + sh.url + '" target="_blank" rel="noopener">' + sh.url + '</a> (same PIN required) <button class="secondary" id="share-stop" style="margin-left:8px;padding:4px 10px">Stop sharing</button>';
+              html += '<br>🌐 <b>Public share ON (Cloudflare):</b> <a href="' + sh.url + '" target="_blank" rel="noopener">' + sh.url + '</a> <button class="secondary" id="share-stop" style="margin-left:8px;padding:4px 10px">Stop sharing</button>';
             } else {
               html += '<br>🌐 <button class="secondary" id="share-start" style="margin-top:6px;padding:5px 12px">' + (sh.installed ? 'Share publicly via Cloudflare' : 'Share over internet (install Cloudflare)') + '</button>' + (sh.error ? ' <span class="muted">(' + sh.error + ')</span>' : '');
             }
           }
-          html += '<br><span class="muted">Remote devices require the PIN. Uploads, file tools and account keys stay on this PC.</span>';
           phoneBox.innerHTML = html;
-          $('phone-newpin').onclick = async () => { await baseRequest('/phone/newpin', {}); loadPhone(); };
+          if ($('phone-newpin')) $('phone-newpin').onclick = async () => { await baseRequest('/phone/newpin', {}); loadPhone(); };
           if ($('share-stop')) $('share-stop').onclick = async () => { await baseRequest('/share/stop', {}); loadPhone(); };
           if ($('share-start')) $('share-start').onclick = async () => {
             const btn = $('share-start'); btn.disabled = true;
             try {
               const cur = await baseRequest('/share/status');
               if (!cur.installed) {
-                if (!confirm('Cloudflare Tunnel (cloudflared) is not installed yet.\n\nDownload and install the official cloudflared binary locally into NeonClipping so you can share a temporary public HTTPS link (protected by your 6-digit PIN)?')) {
+                if (!confirm('Cloudflare Tunnel (cloudflared) is not installed yet.\n\nDownload and install the official cloudflared binary locally into NeonClipping so you can share a temporary public HTTPS link?')) {
                   btn.disabled = false; return;
                 }
                 btn.textContent = 'Installing Cloudflare…';

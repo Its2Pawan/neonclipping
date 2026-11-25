@@ -1,12 +1,8 @@
-"""Phone & multi-device remote: use NeonClipping from any device on your network or shared tunnel.
+"""Multi-device access: open NeonClipping on 0.0.0.0 across phones, tablets and PCs.
 
-The heavy work (recording, speech, rendering) always happens on the PC. Other devices connect with a 6-digit PIN:
-  * By default NeonClipping listens on 0.0.0.0 so phones, tablets and laptops on your Wi-Fi can reach it.
-    Set NEONCLIPPING_LAN=0 to bind to 127.0.0.1 and close all non-PC access.
-  * Anything that is not the PC itself (including requests arriving via a Cloudflare Tunnel proxy) needs the 6-digit
-    PIN (shown only on the PC, stored in data/phone.json). After 5 wrong tries an address is locked for 10 minutes.
-  * Even with the PIN a remote device can only use the mobile/remote UI (/m) and safe live/library/make/creators routes.
-    Uploads, file tools, queue administration, publishing credentials, /phone and /share stay PC-only.
+By default (NEONCLIPPING_LAN != '0') the server listens on 0.0.0.0 and serves the full UI to all devices without a PIN.
+Set NEONCLIPPING_PHONE_PIN=1 to enable the strict 6-digit PIN gate and restrict remote devices to /m.
+Set NEONCLIPPING_LAN=0 to bind to 127.0.0.1 and close non-local access.
 """
 import hmac
 import hashlib
@@ -18,7 +14,7 @@ import time
 from pathlib import Path
 
 from fastapi import HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 LOCAL = ('127.0.0.1', '::1', 'localhost')
 LOCAL_HOSTS = {'127.0.0.1', '::1', 'localhost', 'testserver', ''}
@@ -36,7 +32,6 @@ def is_local_request(request: Request):
     host = request.client.host if request.client else ''
     if not is_local(host):
         return False
-    # Requests forwarded through Cloudflare Tunnel or another reverse proxy are never treated as local PC traffic.
     if request.headers.get('cf-connecting-ip') or request.headers.get('cf-ray') or request.headers.get('x-forwarded-for') or request.headers.get('forwarded'):
         return False
     req_host = (request.headers.get('host') or '').split(':')[0].lower()
@@ -51,6 +46,10 @@ def allowed(path):
 
 def lan_enabled():
     return os.environ.get('NEONCLIPPING_LAN', '1') != '0'
+
+
+def pin_enabled():
+    return os.environ.get('NEONCLIPPING_PHONE_PIN') == '1'
 
 
 def lan_ips():
@@ -120,13 +119,13 @@ def attach(app, data, root):
     async def gate(request: Request, call_next):
         if is_local_request(request):
             return await call_next(request)
-        path = request.url.path
         if not lan_enabled():
-            return JSONResponse({'detail': 'Phone access is off on this computer.'}, status_code=403)
-        if path == '/' and request.method == 'GET':
-            return RedirectResponse('/m', status_code=307)
+            return JSONResponse({'detail': 'Remote access is off on this computer (NEONCLIPPING_LAN=0).'}, status_code=403)
+        if not pin_enabled():
+            return await call_next(request)
+        path = request.url.path
         if path in ('/m', '/m/login', '/manifest.webmanifest', '/phone-icon.svg'):
-            return await call_next(request)                 # the page itself and the PIN form carry no data
+            return await call_next(request)
         if not allowed(path) or path.startswith(('/phone', '/share')):
             return JSONResponse({'detail': 'This is only available on the PC.'}, status_code=403)
         if not authed(request):
@@ -139,6 +138,8 @@ def attach(app, data, root):
 
     @app.post('/m/login')
     def login(b: dict, request: Request):
+        if not pin_enabled():
+            return JSONResponse({'ok': True})
         ip = client_ip(request)
         count, first = fails.get(ip, [0, time.time()])
         if count >= MAX_TRIES and time.time() - first < LOCK_SECONDS:
@@ -157,22 +158,30 @@ def attach(app, data, root):
 
     @app.get('/phone/status')
     def status(request: Request):
-        if not is_local_request(request):
+        if pin_enabled() and not is_local_request(request):
             raise HTTPException(403, 'This is only available on the PC.')
         port = port_of(request)
         on = lan_enabled()
-        return {'enabled': on, 'host': '0.0.0.0' if on else '127.0.0.1', 'port': port,
-                'urls': [f'http://{ip}:{port}/m' for ip in lan_ips()] if on else [], 'pin': load()['pin'] if on else None}
+        pin_on = pin_enabled()
+        return {
+            'enabled': on,
+            'pin_required': pin_on,
+            'host': '0.0.0.0' if on else '127.0.0.1',
+            'port': port,
+            'urls': [f'http://{ip}:{port}' for ip in lan_ips()] if on else [],
+            'mobile_urls': [f'http://{ip}:{port}/m' for ip in lan_ips()] if on else [],
+            'pin': load()['pin'] if (on and pin_on) else None,
+        }
 
     @app.post('/phone/newpin')
     def newpin(request: Request):
-        if not is_local_request(request):
+        if pin_enabled() and not is_local_request(request):
             raise HTTPException(403, 'This is only available on the PC.')
         return {'pin': new_pin()['pin']}
 
     @app.get('/manifest.webmanifest')
     def manifest():
-        return JSONResponse({'name': 'NeonClipping', 'short_name': 'NeonClip', 'start_url': '/m', 'scope': '/', 'display': 'standalone',
+        return JSONResponse({'name': 'NeonClipping', 'short_name': 'NeonClip', 'start_url': '/m' if pin_enabled() else '/', 'scope': '/', 'display': 'standalone',
                              'background_color': '#0b0912', 'theme_color': '#0b0912',
                              'icons': [{'src': '/phone-icon.svg', 'sizes': 'any', 'type': 'image/svg+xml', 'purpose': 'any'}]},
                             media_type='application/manifest+json')

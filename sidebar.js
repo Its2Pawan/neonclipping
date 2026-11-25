@@ -155,20 +155,21 @@
       try {
         const [p, s] = await Promise.all([api('/phone/status'), api('/share/status')]);
         const lanHtml = p.enabled
-          ? '<p><b>LAN / Wi-Fi (0.0.0.0:' + esc(p.port) + '):</b> ' + (p.urls.length ? p.urls.map(u => '<code>' + esc(u) + '</code>').join(' · ') : 'no LAN IP detected') + '</p><p><b>Device PIN:</b> <code style="color:var(--lime);font-size:16px">' + esc(p.pin) + '</code> <button type="button" class="mini-btn" id="sh-pin">New PIN</button></p>'
+          ? '<p><b>All devices (0.0.0.0:' + esc(p.port) + '):</b> ' + (p.urls.length ? p.urls.map(u => '<code>' + esc(u) + '</code>').join(' · ') : 'open this server IP on port ' + esc(p.port)) + '</p>' +
+            (p.pin_required && p.pin ? '<p><b>Device PIN:</b> <code style="color:var(--lime);font-size:16px">' + esc(p.pin) + '</code> <button type="button" class="mini-btn" id="sh-pin">New PIN</button></p>' : '<p class="muted">Full UI enabled for all devices (no PIN required).</p>')
           : '<p class="muted">Network access is disabled (<code>NEONCLIPPING_LAN=0</code>).</p>';
         const cfHtml = s.running && s.url
           ? '<p><b>Cloudflare public URL:</b> <a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.url) + '</a></p><button type="button" class="mini-btn warn" id="sh-stop">Stop Cloudflare share</button>'
-          : '<p class="muted">' + (s.installed ? 'Cloudflare Tunnel (cloudflared) is installed.' : 'Need to share outside your Wi-Fi? NeonClipping will ask before downloading Cloudflare Tunnel (cloudflared).') + '</p><button type="button" class="primary" id="sh-start">' + (s.installed ? 'Start Cloudflare share' : 'Install &amp; Share via Cloudflare') + '</button>' + (s.error ? '<p class="muted">' + esc(s.error) + '</p>' : '');
+          : '<p class="muted">' + (s.installed ? 'Cloudflare Tunnel (cloudflared) is installed.' : 'Need to share outside your local network? NeonClipping will ask before downloading Cloudflare Tunnel (cloudflared).') + '</p><button type="button" class="primary" id="sh-start">' + (s.installed ? 'Start Cloudflare share' : 'Install &amp; Share via Cloudflare') + '</button>' + (s.error ? '<p class="muted">' + esc(s.error) + '</p>' : '');
         b.innerHTML = '<div class="sd-row" style="display:block">' + lanHtml + '</div><div class="sd-row" style="display:block"><b>Public sharing (Cloudflare Tunnel)</b>' + cfHtml + '<p id="sh-msg" class="sd-msg" role="status"></p></div>';
-        $('side-share-line').textContent = s.running && s.url ? 'Cloudflare ON · PIN ' + (p.pin || '') : (p.enabled ? 'LAN ON · PIN ' + (p.pin || '') : 'Local only');
+        $('side-share-line').textContent = s.running && s.url ? 'Cloudflare ON' : (p.enabled ? (p.pin_required ? 'LAN ON · PIN ' + p.pin : 'All devices ON (no PIN)') : 'Local only');
         if ($('sh-pin')) $('sh-pin').onclick = async () => { await api('/phone/newpin', {}); renderShare(); if (window.__reloadDevicesShare) window.__reloadDevicesShare(); };
         if ($('sh-stop')) $('sh-stop').onclick = async () => { await api('/share/stop', {}); renderShare(); if (window.__reloadDevicesShare) window.__reloadDevicesShare(); };
         if ($('sh-start')) $('sh-start').onclick = async () => {
           const msg = t => { const m = $('sh-msg'); if (m) m.textContent = t; };
           try {
             if (!s.installed) {
-              if (!confirm('Download and install Cloudflare Tunnel (cloudflared) locally so you can share NeonClipping over HTTPS (protected by your 6-digit PIN)?')) return;
+              if (!confirm('Download and install Cloudflare Tunnel (cloudflared) locally so you can share NeonClipping over HTTPS?')) return;
               msg('Installing Cloudflare Tunnel…');
               await api('/share/install', { confirm: true });
             }
@@ -181,7 +182,7 @@
       } catch (err) { b.textContent = err.message; }
     }
     shareCard.onclick = () => { shareDlg.showModal(); renderShare(); };
-    api('/phone/status').then(p => { $('side-share-line').textContent = p.enabled ? 'LAN ON · PIN ' + p.pin : 'Local only'; }).catch(() => {});
+    api('/phone/status').then(p => { $('side-share-line').textContent = p.enabled ? (p.pin_required ? 'LAN ON · PIN ' + p.pin : 'All devices ON') : 'Local only'; }).catch(() => {});
 
     // ---- Supporters as a small toggle
     const sup = $('supporters');

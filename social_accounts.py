@@ -165,10 +165,10 @@ def attach(app):
     @app.middleware("http")
     async def local_social(request,call_next):
         if request.url.path.startswith("/social/") or request.url.path=="/social-callback":
-            host=request.url.hostname
             origin=request.headers.get("origin")
-            if host not in ("127.0.0.1","localhost","::1") or (origin and origin!=str(request.base_url).rstrip("/")):
-                return JSONResponse({"detail":"Open publishing on the local app."},status_code=403)
+            sec_site=request.headers.get("sec-fetch-site")
+            if (origin and origin!=str(request.base_url).rstrip("/")) or sec_site=="cross-site":
+                return JSONResponse({"detail":"Open publishing from the NeonClipping app."},status_code=403)
         return await call_next(request)
 
     @app.post("/social/connect/{platform}")

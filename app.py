@@ -1089,5 +1089,5 @@ if __name__=='__main__':
  lan=os.environ.get('NEONCLIPPING_LAN','1')!='0'
  print(f'NeonClipping listening on http://{host}:{port} (local: http://127.0.0.1:{port})')
  if lan:
-  import phone as _ph;print('Every-device access ON. Open on phone / tablet / other devices (same Wi-Fi):',', '.join(f"http://{ip}:{port}/m" for ip in _ph.lan_ips()) or '(no Wi-Fi address found)')
+  import phone as _ph;print('Every-device access ON. Open on phone / tablet / other devices:',', '.join(f"http://{ip}:{port}" for ip in _ph.lan_ips()) or f'http://0.0.0.0:{port}')
  uvicorn.run(app,host=host,port=port)

@@ -134,11 +134,11 @@ def status(data, port="8770"):
             "binary": binary or "",
             "installing": bool(_state["installing"]),
             "running": running,
-            "url": (_state["url"] + "/m") if running and _state["url"] else "",
+            "url": _state["url"] if running else "",
             "base_url": _state["url"] if running else "",
             "error": _state.get("error") or "",
             "port": str(port),
-            "pin_required": True,
+            "pin_required": phone.pin_enabled(),
         }
 
 
@@ -219,8 +219,11 @@ def attach(app, data, root):
         return os.environ.get("NEONCLIPPING_PORT") or str(request.url.port or 8770)
 
     def require_local(request: FastAPIRequest):
-        if not phone.is_local_request(request):
+        if phone.pin_enabled() and not phone.is_local_request(request):
             raise HTTPException(403, "Share controls are only available on the PC.")
+        origin = request.headers.get("origin")
+        if origin and origin != str(request.base_url).rstrip("/"):
+            raise HTTPException(403, "Share controls must be opened from this app.")
 
     @app.get("/share/status")
     def share_status(request: FastAPIRequest):
