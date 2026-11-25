@@ -250,8 +250,8 @@
     async function progressOf(id) {
       try {
         const r = await fetch('/make/' + id);
-        if (r.ok) { const j = await r.json(); progressCache[id] = { p: j.progress, phase: j.phase, title: j.title || '', show: true }; }
-        else { const r2 = await fetch('/status/' + id); if (r2.ok) { const j = await r2.json(); progressCache[id] = { p: j.progress, title: j.title || '', show: !!j.url }; } }
+        if (r.ok) { const j = await r.json(); progressCache[id] = { p: j.progress, phase: j.phase, title: j.title || '', show: !j.internal && j.kind !== 'export' && j.kind !== 'transcribe' }; }
+        else { const r2 = await fetch('/status/' + id); if (r2.ok) { const j = await r2.json(); progressCache[id] = { p: j.progress, title: j.title || '', show: !j.internal && !!j.url }; } }
       } catch (e) { /* ignore */ }
       return progressCache[id] || {};
     }

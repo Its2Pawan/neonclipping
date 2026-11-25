@@ -386,3 +386,70 @@ class MultiPlatformAndAutoUpload(unittest.TestCase):
                     os.environ.pop("NEONCLIPPING_DATA_DIR", None)
                 else:
                     os.environ["NEONCLIPPING_DATA_DIR"] = old_dir
+
+    def test_internal_export_hidden_from_runtime_and_make_status_and_reports_progress(self):
+        import importlib
+        import os
+        import subprocess
+        from fastapi.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_dir = os.environ.get("NEONCLIPPING_DATA_DIR")
+            os.environ["NEONCLIPPING_DATA_DIR"] = tmp
+            try:
+                import app as A
+                A = importlib.reload(A)
+                src_id = "abcdef1234567890abcdef1234567890"
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-v", "error",
+                        "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=12:d=3",
+                        "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+                        str(Path(tmp) / f"{src_id}.mp4"),
+                    ],
+                    check=True,
+                )
+                child_id = "11112222333344445555666677778888"
+                A.state["parentmakejob00000000000000000001"] = {
+                    "status": "running",
+                    "stage": "Exporting clip 1/1",
+                    "phase": "render",
+                }
+                A.state[child_id] = {
+                    "status": "running",
+                    "kind": "export",
+                    "internal": True,
+                    "parent_job": "parentmakejob00000000000000000001",
+                    "message": "Rendering vertical clip with karaoke captions",
+                    "progress": 0.42,
+                }
+                with TestClient(A.app) as client:
+                    rt = client.get("/runtime").json()["active"]
+                    ids = [x["id"] for x in rt]
+                    self.assertIn("parentmakejob00000000000000000001", ids)
+                    self.assertNotIn(child_id, ids)
+                    self.assertEqual(client.get(f"/make/{child_id}").status_code, 404)
+                    self.assertEqual(client.get(f"/status/{child_id}").status_code, 200)
+
+                seen_progress = []
+                out_mp4 = Path(tmp) / "prog_out.mp4"
+                rc, err = A._run_ffmpeg_export(
+                    [
+                        "ffmpeg", "-y", "-v", "error", "-ss", "0", "-t", "2",
+                        "-i", str(Path(tmp) / f"{src_id}.mp4"),
+                        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(out_mp4),
+                    ],
+                    tmp,
+                    2.0,
+                    on_progress=seen_progress.append,
+                )
+                self.assertEqual(rc, 0, err)
+                self.assertTrue(out_mp4.is_file())
+                self.assertTrue(any(0 < p < 1.0 for p in seen_progress) or 1.0 in seen_progress, seen_progress)
+                self.assertEqual(seen_progress[-1], 1.0)
+            finally:
+                if old_dir is None:
+                    os.environ.pop("NEONCLIPPING_DATA_DIR", None)
+                else:
+                    os.environ["NEONCLIPPING_DATA_DIR"] = old_dir

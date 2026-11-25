@@ -128,7 +128,7 @@ def source_range(b):
 @app.post('/transcribe')
 def caption_job(b:dict):
  id,src,m,start,end=source_range(b);job=uuid.uuid4().hex
- state[job]={'status':'running','message':'Starting local captions'}
+ state[job]={'status':'running','kind':'transcribe','message':'Starting local captions'}
  language=b.get('language') or None
  if not languages.valid(language):raise HTTPException(400,'Choose Auto, Hinglish or a language from the list.')
  def work():
@@ -141,6 +141,36 @@ def caption_job(b:dict):
 @app.post('/export')
 def export(b:dict):
  return start_export(b)
+
+def _run_ffmpeg_export(cmd,cwd,dur,on_progress=None):
+ """Run an FFmpeg export command with live `-progress pipe:1` parsing when duration is known."""
+ args=cmd[:4]+['-progress','pipe:1','-nostats']+cmd[4:]
+ proc=subprocess.Popen(args,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1,cwd=str(cwd))
+ err_chunks=[]
+ def _drain_err():
+  try:err_chunks.append(proc.stderr.read() or '')
+  except Exception:pass
+ err_thread=threading.Thread(target=_drain_err,daemon=True);err_thread.start()
+ last_p=-1.0
+ try:
+  if proc.stdout:
+   for line in proc.stdout:
+    line=line.strip()
+    if on_progress and dur>0 and line.startswith('out_time_us='):
+     try:
+      us=int(line.split('=',1)[1])
+      if us>=0:
+       p=min(.99,max(0.0,us/(dur*1_000_000.0)))
+       if p-last_p>=.01:
+        last_p=p;on_progress(p)
+     except ValueError:pass
+    elif line=='progress=end' and on_progress:
+     on_progress(1.0)
+ finally:
+  rc=proc.wait();err_thread.join(timeout=2)
+  if proc.stdout:proc.stdout.close()
+  if proc.stderr:proc.stderr.close()
+ return rc,''.join(err_chunks)
 
 def start_export(b,job=None,auto_source='export'):
  id,src,m,start,end=source_range(b)
@@ -180,7 +210,10 @@ def start_export(b,job=None,auto_source='export'):
  except (ValueError,TypeError,OverflowError) as e:raise HTTPException(400,str(e))
  try:plan=styling.plan(b,DATA)
  except ValueError as e:raise HTTPException(400,str(e))
- job=job or uuid.uuid4().hex;out=DATA/(job+'.mp4');state[job]={'status':'running','message':'Preparing export'}
+ is_internal=bool(auto_source is None or b.get('batch_id'))
+ job=job or uuid.uuid4().hex;out=DATA/(job+'.mp4')
+ state[job]={'status':'running','kind':'export','internal':is_internal,'message':'Preparing export','progress':0.0}
+ if b.get('batch_id'):state[job]['parent_job']=b['batch_id']
  def work():
   try:
    words=[]
@@ -245,17 +278,22 @@ def start_export(b,job=None,auto_source='export'):
    audio_filters=','.join(x for x in (voice_af,fade_af) if x)
    if audio_filters and amap:
     fc+=f';{amap}{audio_filters}[audio_finish]';amap='[audio_finish]';audio_filters=''
-   state[job].update(message='Rendering vertical clip with '+style+' captions' if visible_words else 'Rendering vertical clip')
+   state[job].update(message='Rendering vertical clip with '+style+' captions' if visible_words else 'Rendering vertical clip',progress=0.0)
    base=['ffmpeg','-y','-v','error','-ss',str(start),'-t',str(end-start),'-i',str(src),*(plan.inputs if plan else []),'-filter_complex',fc,'-map',vmap,'-map',amap or '0:a?',*(['-af',audio_filters] if audio_filters else []),'-t',str(dur),'-c:a','aac','-b:a','160k','-movflags','+faststart']
    if fps:base+=['-r',str(fps),'-fps_mode','cfr']
-   for encoder in encoders.h264(cq=20,x264_preset='fast',nv_preset='p5'):
+   preset=os.environ.get('NEONCLIPPING_X264_PRESET') or ('veryfast' if os.environ.get('NEONCLIPPING_CPU')=='1' else 'fast')
+   def _on_prog(p):
+    row=state.get(job)
+    if row and row.get('status')=='running':row['progress']=round(p,3)
+   rc,err=1,''
+   for encoder in encoders.h264(cq=20,x264_preset=preset,nv_preset='p5'):
     # NVIDIA: also decode the source on the GPU (4K VP9/AV1 on the CPU is what pinned it at 100%); retry on the CPU if that fails.
     for hw in ((['-hwaccel','auto'],[]) if encoder[1]!='libx264' and encoder[1]!='h264_videotoolbox' else ([],)):
-     r=subprocess.run(base[:4]+hw+base[4:]+encoder+['-pix_fmt','yuv420p',str(out)],capture_output=True,text=True,cwd=str(DATA))
-     if r.returncode==0:break
-    if r.returncode==0:break
-   if r.returncode:raise RuntimeError(r.stderr[-900:])
-   finished={'status':'done','file':job,'meta':probe(out),'encoder':encoder[1],'caption_words':len(visible_words),'srt':f'/text/{job}/srt' if visible_words else None}
+     rc,err=_run_ffmpeg_export(base[:4]+hw+base[4:]+encoder+['-pix_fmt','yuv420p',str(out)],DATA,dur,_on_prog)
+     if rc==0:break
+    if rc==0:break
+   if rc:raise RuntimeError(err[-900:])
+   finished={'status':'done','kind':'export','internal':is_internal,'file':job,'meta':probe(out),'encoder':encoder[1],'caption_words':len(visible_words),'srt':f'/text/{job}/srt' if visible_words else None}
    (DATA/(job+'.json')).write_text(json.dumps({'source':id,'settings':{**b,**saved_text,'words':words},'result':finished},indent=2),encoding='utf-8')
    state[job]=finished
    if auto_source:
@@ -263,7 +301,7 @@ def start_export(b,job=None,auto_source='export'):
     clip_info={'file':job,'title':saved_text.get('title') or b.get('title') or 'NeonClipping clip','description':saved_text.get('post_caption') or b.get('post_caption') or '','hashtags':b.get('hashtags') or [],'score':b.get('viral_score'),'flags':_automation.check_clip([saved_text.get('title'),saved_text.get('hook'),saved_text.get('post_caption'),' '.join(str(w.get('text','')) for w in words)])}
     _social.auto_queue_clip(app,DATA,clip_info,source=auto_source)
   except Exception as e:
-   import friendly;plain,original=friendly.explain(str(e)[-900:]);state[job]={'status':'error','error':plain,'error_detail':original}
+   import friendly;plain,original=friendly.explain(str(e)[-900:]);state[job]={'status':'error','kind':'export','internal':is_internal,'error':plain,'error_detail':original}
  threading.Thread(target=work,daemon=True).start();return {'job':job}
 try:LIVE_AUTO_HOURS=max(.25,float(os.environ.get('NEONCLIPPING_LIVE_AUTO_HOURS','3')))   # unattended creator-watch sessions stop after this many hours
 except ValueError:LIVE_AUTO_HOURS=3.0
@@ -696,9 +734,16 @@ def start_make(b, previous=None):
      saved=json.loads(output_record.read_text(encoding='utf-8'))
      if saved.get('result',{}).get('status')=='done':r=saved['result']
     if r is None:
-     save(job,{'stage':f'Exporting clip {i+1}/{len(found)}','phase':'render'})
+     save(job,{'stage':f'Exporting clip {i+1}/{len(found)}','phase':'render','progress':round(.6+.4*i/len(found),3)})
      ej=start_export(body,ej,auto_source=None)['job']
-     while state.get(ej,{}).get('status')=='running':time.sleep(.7)
+     last_sub=-1
+     while state.get(ej,{}).get('status')=='running':
+      sub_p=float(state.get(ej,{}).get('progress') or 0)
+      pct=min(99,max(0,int(sub_p*100)))
+      if pct>=last_sub+2 or (pct>0 and last_sub<0):
+       last_sub=pct
+       save(job,{'stage':f'Exporting clip {i+1}/{len(found)} · {pct}%','progress':round(.6+.4*(i+min(.99,sub_p))/len(found),3)})
+      time.sleep(.7)
      r=state[ej]
     import automation as _automation, social as _social      # 5H: words-to-avoid check, webhook, and optional auto-upload
     flags_=_automation.check_clip([c.get('title'),c.get('hook'),c.get('description'),' '.join(str(w.get('text','')) for w in (body.get('words') or []))])
@@ -950,7 +995,7 @@ def resume_make(job:str):
 
 @app.get('/make/{job}')
 def make_status(job:str):
- if job not in state:raise HTTPException(404,'Job unavailable after restart. Please retry.')
+ if job not in state or state[job].get('kind') in ('export','transcribe'):raise HTTPException(404,'Job unavailable after restart. Please retry.')
  term_id,term_rec=_resolve_resume_chain(job)
  can_resume=_job_resumable(term_id,term_rec)
  return {**report.note_job_error(state[job]),'can_resume':can_resume,'resume_job':term_id if can_resume else None}
@@ -1068,7 +1113,7 @@ def update_apply():
 
 @app.get('/runtime')
 def runtime():
- return {'active':[{'id':job,'status':row.get('status'),'stage':row.get('stage') or row.get('message','')} for job,row in list(state.items()) if row.get('status') in ('running','queued','starting','recording')]}
+ return {'active':[{'id':job,'status':row.get('status'),'stage':row.get('stage') or row.get('message','')} for job,row in list(state.items()) if row.get('status') in ('running','queued','starting','recording') and not row.get('internal')]}
 from reedit import attach as attach_reedit
 attach_reedit(app,DATA,state,probe,export,app.neon['save'])
 
