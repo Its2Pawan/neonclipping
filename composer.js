@@ -69,20 +69,64 @@
       noteTimer = setTimeout(() => { composerNote.hidden = true; }, 12000);
     }).observe(statusLine, { childList: true, characterData: true, subtree: true });
 
-    // a small "add to queue" link under the link box
+    // a small "add to queue" link + paste feedback under the link box
     const queueLink = document.createElement('button');
     queueLink.type = 'button';
     queueLink.className = 'linklike queue-add-link';
     queueLink.textContent = '＋ Add to queue instead (runs after the current job)';
+    const clearLink = document.createElement('button');
+    clearLink.type = 'button';
+    clearLink.className = 'url-clear';
+    clearLink.textContent = '✕ Clear link';
+    clearLink.hidden = true;
     const row = importPanel.querySelector('.url-row');
-    if (row) { row.after(queueLink); queueLink.after(composerNote); }
+    if (row) { row.after(queueLink); queueLink.after(clearLink, composerNote); }
+    const urlBox = $('url');
+    const linkStatus = $('link-status');
+    function syncUrlState() {
+      const val = (urlBox && urlBox.value.trim()) || '';
+      clearLink.hidden = !val;
+      if (val) {
+        const host = (() => { try { const h = new URL(val).hostname.replace(/^www\./, ''); return /youtu/.test(h) ? 'YouTube' : /twitch/.test(h) ? 'Twitch' : /kick/.test(h) ? 'Kick' : h; } catch { return ''; } })();
+        if (host && linkStatus && (!linkStatus.textContent || /^Frames arrive first|^Ready:/.test(linkStatus.textContent.trim()))) {
+          linkStatus.textContent = 'Ready: ' + host + ' link pasted — press ⚡ Make clips (or Get preview ↗).';
+        }
+        const emptyTitle = empty.querySelector('b'), emptySub = empty.querySelector('span');
+        if (emptyTitle && emptySub) {
+          emptyTitle.textContent = 'Link ready to clip';
+          emptySub.textContent = 'Press ⚡ Make clips above (or press Enter) to create captioned clips.';
+        }
+      } else {
+        if (linkStatus && /^Ready:/.test(linkStatus.textContent.trim())) {
+          linkStatus.textContent = 'Frames arrive first. Select your areas while the full source downloads.';
+        }
+        const emptyTitle = empty.querySelector('b'), emptySub = empty.querySelector('span');
+        if (emptyTitle && emptySub) {
+          emptyTitle.textContent = 'Your clips will appear here';
+          emptySub.textContent = 'Paste a YouTube, Twitch or Kick link above and press Make clips. Everything runs on this PC.';
+        }
+      }
+    }
+    if (urlBox) {
+      urlBox.addEventListener('input', syncUrlState);
+      urlBox.addEventListener('paste', () => setTimeout(syncUrlState, 10));
+      urlBox.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey && urlBox.value.trim()) {
+          e.preventDefault();
+          const btn = $('make');
+          if (btn && !btn.disabled) btn.click();
+        }
+      });
+      syncUrlState();
+    }
+    clearLink.onclick = () => { if (urlBox) { urlBox.value = ''; urlBox.focus(); syncUrlState(); } };
     queueLink.onclick = async () => {
       const url = ($('url') && $('url').value.trim()) || '';
       if (!url) { if (typeof status === 'function') status('Paste a video link first.'); return; }
       if ($('queue-urls') && $('queue-add')) {
         $('queue-urls').value = url;
         $('queue-add').click();
-        setTimeout(() => { $('url').value = ''; refresh(); }, 600);
+        setTimeout(() => { $('url').value = ''; syncUrlState(); refresh(); }, 600);
       }
     };
 
