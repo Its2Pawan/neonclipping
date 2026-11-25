@@ -216,18 +216,19 @@
       socialBar.prepend(wrap);
     }
 
-    // 2. Quick Caption / Spoken Language selector right next to Download quality on the main screen
-    const srcqWrap = $('srcq') && $('srcq').closest('label');
+    // 2. Quick Caption / Spoken Language selector placed cleanly below the URL row (never squishing #url)
     const hiddenLang = $('language');
-    if (srcqWrap && hiddenLang && !$('quick-lang')) {
+    const anchor = document.querySelector('.import-panel .queue-add-link') || document.querySelector('.import-panel .url-row');
+    if (anchor && hiddenLang && !$('quick-lang')) {
       const ql = document.createElement('label');
-      ql.className = 'srcq-inline';
+      ql.style.cssText = 'display:inline-flex;flex-direction:row;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:var(--muted)';
       ql.title = 'Spoken / caption language used when making clips and transcripts.';
       const lbl = document.createElement('span');
       lbl.id = 'quick-lang-label';
       lbl.textContent = 'Caption language';
       const qsel = document.createElement('select');
       qsel.id = 'quick-lang';
+      qsel.style.cssText = 'padding:5px 10px;border-radius:99px;font-size:12px;max-width:240px';
       qsel.innerHTML = hiddenLang.innerHTML;
       qsel.value = hiddenLang.value;
       qsel.onchange = () => {
@@ -236,7 +237,7 @@
       };
       hiddenLang.addEventListener('change', () => { qsel.value = hiddenLang.value; });
       ql.append(lbl, qsel);
-      srcqWrap.after(ql);
+      anchor.after(ql);
     }
 
     applyUiLanguage(savedUi);
