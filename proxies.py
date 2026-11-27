@@ -28,9 +28,10 @@ VALID_PROXY_SCHEMES = ('http', 'https', 'socks4', 'socks4a', 'socks5', 'socks5h'
 SOCKS_SCHEMES = ('socks4', 'socks4a', 'socks5', 'socks5h')
 SUPPORTED_COUNTRIES = ('IN', 'US', 'GB', 'SG', 'DE', 'CA', 'AU', 'JP', 'FR', 'BR', 'AUTO', 'ALL')
 CACHE_TTL = 1800          # refresh GitHub raw lists at most every 30 minutes unless requested
+ALIVE_TTL = 600           # reuse speed-ranked alive proxy list for 10 minutes
 BAD_TTL = 600             # cooldown for proxies that timed out or failed against YouTube
 TCP_PROBE_TIMEOUT = 3.0
-TCP_PROBE_LIMIT = 180
+TCP_PROBE_LIMIT = 400
 
 COUNTRY_ALIASES = {
     'india': 'IN',
@@ -84,10 +85,11 @@ def _load_cache_file(data_dir):
                 'good': [x for x in raw.get('good', []) if isinstance(x, str)][:25],
                 'bad': {str(k): float(v) for k, v in (raw.get('bad') or {}).items() if isinstance(v, (int, float))},
                 'lists': raw.get('lists') if isinstance(raw.get('lists'), dict) else {},
+                'alive': raw.get('alive') if isinstance(raw.get('alive'), dict) else {},
             }
     except (OSError, ValueError, TypeError):
         pass
-    return {'good': [], 'bad': {}, 'lists': {}}
+    return {'good': [], 'bad': {}, 'lists': {}, 'alive': {}}
 
 
 def _save_cache_file(data_dir, entry):
@@ -99,6 +101,7 @@ def _save_cache_file(data_dir, entry):
             'good': list(entry['good'])[:25],
             'bad': {k: v for k, v in entry['bad'].items() if now - v < BAD_TTL},
             'lists': entry['lists'],
+            'alive': entry.get('alive') or {},
         }
         tmp = d / 'proxy_cache.tmp'
         tmp.write_text(json.dumps(clean), encoding='utf-8')
@@ -509,20 +512,49 @@ def _tcp_alive(proxy_url, timeout=TCP_PROBE_TIMEOUT):
 _TLS_CTX = ssl.create_default_context()
 
 
-def _https_alive(proxy_url, timeout=TCP_PROBE_TIMEOUT + 1.5):
-    """Verify tunnel + real TLS handshake + YouTube HTTP 204 latency; returns (seconds, proxy_url) or None."""
+def _https_alive(proxy_url, timeout=5.5):
+    """Verify tunnel + real TLS + YouTube download throughput; returns (sec_per_128kb, proxy_url) sorted fastest first."""
     t0 = time.monotonic()
-    s = _open_tunnel(proxy_url, timeout=timeout)
+    deadline = t0 + timeout
+    s = _open_tunnel(proxy_url, timeout=min(TCP_PROBE_TIMEOUT, timeout))
     if s is None:
         return None
     tls = None
     try:
         tls = _TLS_CTX.wrap_socket(s, server_hostname='www.youtube.com')
-        tls.settimeout(timeout)
-        tls.sendall(b'GET /generate_204 HTTP/1.1\r\nHost: www.youtube.com\r\nConnection: close\r\n\r\n')
-        head = tls.recv(128).split(b'\r\n', 1)[0]
-        if re.match(rb'^HTTP/1\.[01]\s+(?:204|200|30\d)\b', head):
-            return (round(time.monotonic() - t0, 3), proxy_url)
+        tls.settimeout(max(0.5, deadline - time.monotonic()))
+        tls.sendall(b'GET / HTTP/1.1\r\nHost: www.youtube.com\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n')
+        buf = bytearray()
+        body_start = -1
+        code = ''
+        while time.monotonic() < deadline:
+            tls.settimeout(max(0.3, deadline - time.monotonic()))
+            chunk = tls.recv(32768)
+            if not chunk:
+                break
+            buf.extend(chunk)
+            if body_start < 0:
+                idx = buf.find(b'\r\n\r\n')
+                if idx >= 0:
+                    head = bytes(buf[:idx]).split(b'\r\n', 1)[0]
+                    m = re.match(rb'^HTTP/1\.[01]\s+(200|204|30\d)\b', head)
+                    if not m:
+                        return None
+                    code = m.group(1).decode('ascii')
+                    body_start = idx + 4
+                    if code == '204':
+                        break
+            if body_start >= 0 and len(buf) - body_start >= 262144:
+                break
+        if body_start < 0:
+            return None
+        elapsed = max(0.05, time.monotonic() - t0)
+        body_bytes = len(buf) - body_start
+        if code == '200' and body_bytes >= 49152:
+            # Seconds per 128 KB transferred (lower = higher throughput + lower handshake latency).
+            return (round(elapsed / (body_bytes / 131072.0), 3), proxy_url)
+        if code != '200':
+            return (round(elapsed * 2.5, 3), proxy_url)
         return None
     except Exception:
         return None
@@ -536,15 +568,15 @@ def _https_alive(proxy_url, timeout=TCP_PROBE_TIMEOUT + 1.5):
 
 
 def filter_alive(candidates, limit=TCP_PROBE_LIMIT, max_results=20):
-    """Verify tunnel + TLS/HTTP YouTube reachability in parallel and return fastest proxies first."""
+    """Verify tunnel + TLS/HTTP YouTube throughput in parallel and return fastest proxies first."""
     sample = list(candidates[:limit])
     if not sample:
         return []
     hits = []
-    ex = ThreadPoolExecutor(max_workers=min(48, len(sample)))
+    ex = ThreadPoolExecutor(max_workers=min(80, len(sample)))
     futures = [ex.submit(_https_alive, p) for p in sample]
     try:
-        for fut in as_completed(futures, timeout=TCP_PROBE_TIMEOUT + 3.0):
+        for fut in as_completed(futures, timeout=6.5):
             res = fut.result()
             if res:
                 hits.append(res)
@@ -562,8 +594,8 @@ def candidates(data_dir, country=None, force_refresh=False, probe_tcp=True, fetc
     """Return ordered list of proxy URLs to try for rotation:
     1. User's explicit single proxy (always trusted first if set)
     2. Recently working sticky proxies ('good')
-    3. User's custom proxy_list (TCP-probed if probe_tcp)
-    4. GitHub fetched proxies for the chosen country (TCP-probed if probe_tcp)
+    3. User's custom proxy_list (bandwidth-probed if probe_tcp)
+    4. GitHub fetched proxies for the chosen country (bandwidth-probed if probe_tcp & cached)
     Returns (list_of_proxies, includes_public_pool_bool).
     """
     cfg = config(data_dir)
@@ -575,6 +607,7 @@ def candidates(data_dir, country=None, force_refresh=False, probe_tcp=True, fetc
     with _LOCK:
         bad = {k for k, ts in mem['bad'].items() if now - ts < BAD_TTL}
         good = [p for p in mem['good'] if p not in bad]
+        alive_entry = (mem.get('alive') or {}).get(cc)
 
     manual_single = [cfg['proxy']] if cfg['proxy'] else []
     custom_list = [p for p in parse_proxy_text(cfg['proxy_list']) if p not in bad and p not in manual_single]
@@ -593,9 +626,19 @@ def candidates(data_dir, country=None, force_refresh=False, probe_tcp=True, fetc
 
     pool = custom_list + remote_list
     if probe_tcp and pool:
-        probed = filter_alive(pool)
-        if probed:
-            pool = probed
+        cached_alive = []
+        if not force_refresh and alive_entry and now - alive_entry.get('ts', 0) < ALIVE_TTL:
+            pool_set = set(pool)
+            cached_alive = [p for p in alive_entry.get('proxies', []) if p in pool_set and p not in bad]
+        if len(cached_alive) >= 2:
+            pool = cached_alive
+        else:
+            probed = filter_alive(pool)
+            if probed:
+                pool = probed
+                with _LOCK:
+                    mem.setdefault('alive', {})[cc] = {'ts': time.time(), 'proxies': list(probed)}
+                    _save_cache_file(data_dir, mem)
 
     ordered = []
     seen = set()
@@ -604,6 +647,18 @@ def candidates(data_dir, country=None, force_refresh=False, probe_tcp=True, fetc
             seen.add(p)
             ordered.append(p)
     return ordered, uses_public_pool
+
+
+def refresh_pool(data_dir, country='IN'):
+    """Fetch fresh GitHub proxies for `country`, benchmark YouTube throughput across the pool, and cache fastest first."""
+    cc = 'IN' if normalize_country(country) == 'AUTO' else normalize_country(country)
+    raw = fetch_github_proxies(data_dir, country=cc, force=True)
+    alive = filter_alive(_prioritize_protocols(raw), limit=TCP_PROBE_LIMIT, max_results=20)
+    mem = _mem(data_dir)
+    with _LOCK:
+        mem.setdefault('alive', {})[cc] = {'ts': time.time(), 'proxies': list(alive)}
+        _save_cache_file(data_dir, mem)
+    return raw, alive
 
 
 def mark_good(data_dir, proxy_url):
@@ -624,6 +679,9 @@ def mark_bad(data_dir, proxy_url):
     with _LOCK:
         mem['bad'][proxy_url] = time.time()
         mem['good'] = [p for p in mem['good'] if p != proxy_url]
+        for entry in (mem.get('alive') or {}).values():
+            if isinstance(entry, dict) and isinstance(entry.get('proxies'), list):
+                entry['proxies'] = [p for p in entry['proxies'] if p != proxy_url]
         _save_cache_file(data_dir, mem)
 
 

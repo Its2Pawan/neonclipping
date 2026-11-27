@@ -58,8 +58,11 @@ PROXY_ERR_MARKERS = (
     'proxyerror', 'socks', 'unable to download api page', 'timed out', 'timeout',
     'connection reset', 'connection refused', 'connection aborted', 'remote end closed',
     'eoferror', 'eof occurred', 'tunnel connection failed', 'certificate verify failed',
-    'unable to connect to proxy', 'requested format is not available',
+    'unable to connect to proxy', 'requested format is not available', 'proxy too slow',
 )
+
+class SlowProxyError(RuntimeError):
+    """Raised by the download progress watchdog when a public proxy crawls too slowly and backup proxies exist."""
 
 def is_blocked(error):
     text = str(error).lower()
@@ -147,7 +150,9 @@ class YDL:
         max_tries = 18 if cfg['proxy_auto_rotate'] else 1
         last_err = first_error
         blocked = False
-        for proxy_url in pool[:max_tries]:
+        attempt_pool = pool[:max_tries]
+        for idx, proxy_url in enumerate(attempt_pool):
+            has_backup = idx + 1 < len(attempt_pool)
             use_bridge = bool('download_ranges' in base and proxy_url.startswith(proxies.SOCKS_SCHEMES))
             ctx = proxies.LocalProxyBridge(proxy_url) if use_bridge else nullcontext(proxy_url)
             with ctx as active_proxy:
@@ -157,6 +162,28 @@ class YDL:
                     if opts.get('skip_download'):
                         opts['retries'] = 0
                         opts['socket_timeout'] = min(float(opts.get('socket_timeout') or 12), 8)
+                if is_public and cfg['proxy_auto_rotate'] and has_backup and not opts.get('skip_download'):
+                    user_hooks = list(opts.get('progress_hooks') or [])
+                    dl_state = {'t0': None, 'b0': 0}
+
+                    def _speed_guard(d, st=dl_state):
+                        if d.get('status') == 'downloading':
+                            got = d.get('downloaded_bytes') or 0
+                            total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+                            now_t = time.monotonic()
+                            if st['t0'] is None:
+                                st['t0'] = now_t
+                                st['b0'] = got
+                            dt = now_t - st['t0']
+                            if dt >= 10.0 and (total == 0 or total > 2 * 1024 * 1024):
+                                avg = max(0.0, got - st['b0']) / dt
+                                cur_speed = d.get('speed')
+                                if avg < 90_000 and (cur_speed is None or cur_speed < 100_000):
+                                    raise SlowProxyError(f'Proxy too slow ({avg / 1024:.0f} KB/s); rotating to faster proxy.')
+                        elif d.get('status') == 'finished':
+                            st['t0'] = None
+
+                    opts['progress_hooks'] = user_hooks + [_speed_guard]
                 try:
                     with yt_dlp.YoutubeDL(opts) as y:
                         result = fn(y)

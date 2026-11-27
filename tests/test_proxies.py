@@ -185,6 +185,33 @@ class RotationAndBridgeTests(unittest.TestCase):
         self.assertEqual(len(seen), 1)
         self.assertTrue(seen[0].startswith('http://127.0.0.1:'), seen)
 
+    def test_slow_proxy_aborts_and_rotates_to_faster_proxy(self):
+        proxies.save_settings(self.data, {
+            'proxy_mode': 'always',
+            'proxy_github': False,
+            'proxy_auto_rotate': True,
+            'proxy_list': 'http://slow-proxy:8080\nhttp://fast-proxy:8080',
+        })
+        now = [100.0]
+
+        def rule(opts):
+            px = opts.get('proxy')
+            hooks = opts.get('progress_hooks') or []
+            if px == 'http://slow-proxy:8080' and hooks:
+                hooks[0]({'status': 'downloading', 'downloaded_bytes': 1024, 'total_bytes': 22_000_000, 'speed': 30_000})
+                now[0] += 12.0
+                hooks[0]({'status': 'downloading', 'downloaded_bytes': 300_000, 'total_bytes': 22_000_000, 'speed': 25_000})
+            if px == 'http://fast-proxy:8080':
+                return {'title': 'fast-ok'}
+            return {'title': 'unexpected'}
+
+        FakeYTProxy.rule = staticmethod(rule)
+        with mock.patch.object(ytdl.time, 'monotonic', side_effect=lambda: now[0]):
+            res = ytdl.YDL({'quiet': True}).download(['https://youtu.be/jwttobgA1w0'])
+        self.assertEqual(res, {'title': 'fast-ok'})
+        self.assertEqual(proxies.stats(self.data)['last_good'], 'http://fast-proxy:8080')
+        self.assertEqual(proxies.stats(self.data)['bad_cooldown_count'], 1)
+
     def test_local_proxy_bridge_tunnels_connect_via_socks5(self):
         # Spin up a tiny fake upstream SOCKS5 server + fake echo target
         target = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

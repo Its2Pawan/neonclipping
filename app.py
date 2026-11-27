@@ -1177,8 +1177,7 @@ def ytdl_proxies_refresh(b:dict=None):
  b=b or {}
  pcfg=proxies.config(DATA)
  country=proxies.normalize_country(b.get('proxy_country') or pcfg['proxy_country'])
- raw=proxies.fetch_github_proxies(DATA,country=('IN' if country=='AUTO' else country),force=True)
- alive=proxies.filter_alive(proxies._prioritize_protocols(raw),limit=80,max_results=20)
+ raw,alive=proxies.refresh_pool(DATA,country=country)
  return {'ok':True,'country':country,'fetched':len(raw),'alive':len(alive),'sample':[proxies.redact_proxy(p) for p in alive[:5]],'proxy_stats':proxies.stats(DATA)}
 
 @app.get('/update/status')
