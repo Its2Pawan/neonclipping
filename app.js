@@ -445,9 +445,36 @@ function camFilter(){const g=k=>Number(document.getElementById('cam-'+k)?.value)
 ['contrast','brightness','saturation','clarity'].forEach(k=>{const el=document.getElementById('cam-'+k);if(!el)return;const out=document.getElementById('cam-'+k+'-o');const show=()=>{if(out)out.textContent=Number(el.value).toFixed(2);};el.addEventListener('input',()=>{show();if(typeof paint==='function')paint();});show();});
 const camReset=document.getElementById('cam-reset');if(camReset)camReset.onclick=()=>{const d={contrast:1,brightness:0,saturation:1,clarity:0};for(const k in d){const el=document.getElementById('cam-'+k);if(el){el.value=d[k];el.dispatchEvent(new Event('input'));}}};
 
-(async()=>{try{const s=await request('/ytdl/settings');if($('yt-browser'))$('yt-browser').value=s.cookies_browser||'';}catch(e){}
- if($('yt-save'))$('yt-save').onclick=async()=>{try{await request('/ytdl/settings',{cookies_browser:$('yt-browser').value});$('yt-note').textContent='Saved. Press Get preview again.';}catch(e){$('yt-note').textContent=e.message;}};
- const watch=new MutationObserver(()=>{const t=($('link-status').textContent||'')+' '+($('status')?.textContent||'');if(/bot check|not a bot/i.test(t)&&$('yt-login'))$('yt-login').open=true;});
+(async()=>{
+ const splitUrls=raw=>{const urls=[],ips=[];for(const line of String(raw||'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean)){if(/^https:\/\/[^/\s]+\/.+/i.test(line))urls.push(line);else ips.push(line);}return {urls,ips:ips.join('\n')};};
+ const fill=s=>{
+  if($('yt-browser'))$('yt-browser').value=s.cookies_browser||'';
+  if($('yt-proxy-mode'))$('yt-proxy-mode').value=s.proxy_mode||'off';
+  if($('yt-proxy-country'))$('yt-proxy-country').value=s.proxy_country||'IN';
+  if($('yt-proxy'))$('yt-proxy').value=s.proxy||'';
+  if($('yt-proxy-github'))$('yt-proxy-github').checked=!!s.proxy_github;
+  if($('yt-proxy-rotate'))$('yt-proxy-rotate').checked=s.proxy_auto_rotate!==false;
+  if($('yt-proxy-list'))$('yt-proxy-list').value=[...(s.proxy_sources||[]),...(s.proxy_list?s.proxy_list.split('\n'):[])].join('\n');
+  if($('yt-note')&&s.proxy_stats){const st=s.proxy_stats;if(st.last_good||st.cached_count)$('yt-note').textContent=`Cached: ${st.cached_count||0} · Working: ${st.good_count||0}`+(st.last_good?` · Last OK: ${st.last_good}`:'');}
+ };
+ try{fill(await request('/ytdl/settings'));}catch(e){}
+ if($('yt-proxy-github'))$('yt-proxy-github').onchange=()=>{if($('yt-proxy-github').checked&&$('yt-proxy-mode')?.value==='off')$('yt-proxy-mode').value='fallback';};
+ if($('yt-save'))$('yt-save').onclick=async()=>{
+  try{
+   const parsed=splitUrls($('yt-proxy-list')?.value||'');
+   const body={cookies_browser:$('yt-browser')?.value||'',proxy_mode:$('yt-proxy-mode')?.value||'off',proxy_country:$('yt-proxy-country')?.value||'IN',
+               proxy:$('yt-proxy')?.value||'',proxy_github:!!$('yt-proxy-github')?.checked,proxy_auto_rotate:$('yt-proxy-rotate')?.checked!==false,
+               proxy_list:parsed.ips,proxy_sources:parsed.urls};
+   const res=await request('/ytdl/settings',body);fill(res);$('yt-note').textContent='Saved. Press Get preview or Make clips again.';
+  }catch(e){$('yt-note').textContent=e.message;}
+ };
+ if($('yt-proxy-refresh'))$('yt-proxy-refresh').onclick=async()=>{
+  const btn=$('yt-proxy-refresh');btn.disabled=true;$('yt-note').textContent='Fetching GitHub proxies & testing reachability...';
+  try{const r=await request('/ytdl/proxies/refresh',{proxy_country:$('yt-proxy-country')?.value||'IN'});
+   $('yt-note').textContent=`Fetched ${r.fetched} (${r.country}), ${r.alive} TCP-reachable now.`+(r.sample?.length?' Ready to rotate.':' Try ALL countries or add a custom proxy.');}
+  catch(e){$('yt-note').textContent=e.message;}finally{btn.disabled=false;}
+ };
+ const watch=new MutationObserver(()=>{const t=($('link-status')?.textContent||'')+' '+($('status')?.textContent||'');if(/bot check|not a bot|blocked in your country|not available in your country|geo.?restrict/i.test(t)&&$('yt-login'))$('yt-login').open=true;});
  if($('link-status'))watch.observe($('link-status'),{childList:true,characterData:true,subtree:true});
 })();
 

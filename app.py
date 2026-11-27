@@ -1082,22 +1082,37 @@ storage.attach(app,DATA,ROOT,lambda:any(row.get('status') in ('running','queued'
 
 @app.get('/ytdl/settings')
 def ytdl_settings_get():
- import ytdl
- browser,cookie_file=ytdl._config()
- return {'cookies_browser':browser,'cookie_file':bool(Path(cookie_file).is_file()),'js_runtime':sorted(ytdl.js_runtimes())}
+ import ytdl, proxies
+ browser,cookie_file=ytdl._config(DATA)
+ pcfg=proxies.config(DATA)
+ return {'cookies_browser':browser,'cookie_file':bool(Path(cookie_file).is_file()),'js_runtime':sorted(ytdl.js_runtimes()),
+         **pcfg,'proxy':proxies.redact_proxy(pcfg['proxy']),'proxy_stats':proxies.stats(DATA)}
 @app.post('/ytdl/settings')
 def ytdl_settings_set(b:dict):
- """Which browser's YouTube login to borrow when YouTube shows its bot check ('' turns it off)."""
- import ytdl
- browser=str(b.get('cookies_browser') or '').strip().lower()
- if browser not in ('','chrome','edge','firefox','brave','opera','vivaldi','chromium'):raise HTTPException(400,'Choose Chrome, Edge, Firefox, Brave, Opera or Vivaldi.')
- path=ytdl.DATA/'ytdl.json'
- try:cfg=json.loads(path.read_text(encoding='utf-8'))
- except (OSError,ValueError):cfg={}
- if browser:cfg['cookies_browser']=browser
- else:cfg.pop('cookies_browser',None)
- ytdl.DATA.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(cfg),encoding='utf-8')
- return {'ok':True,'cookies_browser':browser}
+ """Which browser's YouTube login to borrow when YouTube shows its bot check, plus optional proxy / GitHub auto-rotation."""
+ import ytdl, proxies
+ path=DATA/'ytdl.json'
+ if 'cookies_browser' in b:
+  browser=str(b.get('cookies_browser') or '').strip().lower()
+  if browser not in ('','chrome','edge','firefox','brave','opera','vivaldi','chromium'):raise HTTPException(400,'Choose Chrome, Edge, Firefox, Brave, Opera or Vivaldi.')
+  try:cfg=json.loads(path.read_text(encoding='utf-8'))
+  except (OSError,ValueError):cfg={}
+  if browser:cfg['cookies_browser']=browser
+  else:cfg.pop('cookies_browser',None)
+  DATA.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(cfg),encoding='utf-8')
+ try:pcfg=proxies.save_settings(DATA,b)
+ except ValueError as e:raise HTTPException(400,str(e))
+ browser,_=ytdl._config(DATA)
+ return {'ok':True,'cookies_browser':browser,**pcfg,'proxy':proxies.redact_proxy(pcfg['proxy']),'proxy_stats':proxies.stats(DATA)}
+@app.post('/ytdl/proxies/refresh')
+def ytdl_proxies_refresh(b:dict=None):
+ import proxies
+ b=b or {}
+ pcfg=proxies.config(DATA)
+ country=proxies.normalize_country(b.get('proxy_country') or pcfg['proxy_country'])
+ raw=proxies.fetch_github_proxies(DATA,country=('IN' if country=='AUTO' else country),force=True)
+ alive=proxies.filter_alive(proxies._prioritize_protocols(raw),limit=80,max_results=20)
+ return {'ok':True,'country':country,'fetched':len(raw),'alive':len(alive),'sample':[proxies.redact_proxy(p) for p in alive[:5]],'proxy_stats':proxies.stats(DATA)}
 
 @app.get('/update/status')
 def update_status():
