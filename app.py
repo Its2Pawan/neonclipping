@@ -1,6 +1,6 @@
 from pathlib import Path
 from contextlib import asynccontextmanager
-import json, subprocess, uuid, threading, shutil
+import json, re, subprocess, uuid, threading, shutil
 import sys
 import time
 import os
@@ -483,21 +483,39 @@ def start_make(b, previous=None):
    from concurrent.futures import ThreadPoolExecutor as _TP
    W=curation.profile_weights(learn.load_weights(DATA),profile)
    performance=social.duration_preferences(DATA)
+   import proxies as _proxies
+   using_proxy=_proxies.config(DATA)['proxy_mode']!='off'
    def lowres_section(u,c):
     """A tiny 144p copy of just this candidate, only for looking at the action (motion, flashes, light strobes)."""
     from yt_dlp.utils import download_range_func
     name='lr_'+uuid.uuid4().hex
     with _yt({'format':'worst[ext=mp4]/bv*[height<=240][ext=mp4]/worst','outtmpl':str(DATA/(name+'.%(ext)s')),'merge_output_format':'mp4',
+              'retries':1,'fragment_retries':1,'concurrent_fragment_downloads':1,'socket_timeout':12,
+              'external_downloader_args':{'ffmpeg_i':['-rw_timeout','12000000']},
               'download_ranges':download_range_func(None,[(max(0,c['start']),c['end'])])}) as y:y.download([u])
     f=next(x for x in DATA.glob(name+'.*') if x.suffix not in ('.part','.ytdl'))
     return f,0.0
-   def choose(pool_clips,locate):
+   def lowres_whole(u):
+    """For up to ~45 min videos, fetching one tiny low-res file once avoids 8 slow range-seeks over a proxy."""
+    name='lrw_'+uuid.uuid4().hex
+    try:
+     with _yt({'format':'worst[height<=240][ext=mp4]/worst[ext=mp4]/worst','outtmpl':str(DATA/(name+'.%(ext)s')),'merge_output_format':'mp4',
+               'retries':1,'fragment_retries':1,'concurrent_fragment_downloads':2,'socket_timeout':12,'max_filesize':70*1024*1024}) as y:y.download([u])
+     return next((x for x in DATA.glob(name+'.*') if x.suffix not in ('.part','.ytdl') and x.stat().st_size>1024),None)
+    except Exception:
+     for x in DATA.glob(name+'.*'):x.unlink(missing_ok=True)
+     return None
+   def choose(pool_clips,locate,deadline_s=None):
     """Look at the action in the best candidates, re-rank with the learned weights, keep `count`."""
     K=min(len(pool_clips),count*2)
     top=pool_clips[:K];save(job,{'stage':'Checking action in the best moments','progress':.5})
+    prog_lock=threading.Lock();checked=[0]
+    deadline=(time.monotonic()+deadline_s) if deadline_s else None
     def one(c):
      tmp=None
      try:
+      if deadline and time.monotonic()>deadline:
+       c['_act']=None;c['reason']=c.get('reason','')+' (action check skipped — slow download)';return
       f,off=locate(c)
       tmp=f if str(f).startswith(str(DATA)) and Path(f).name.startswith('lr_') else None
       c['_act']=action.analyze(f,off,c['end']-c['start'])
@@ -507,7 +525,11 @@ def start_make(b, previous=None):
      except Exception as e:c['_act']=None;c['reason']=c.get('reason','')+' (no action check)'
      finally:
       if tmp:Path(tmp).unlink(missing_ok=True)
-    with _TP(max_workers=4) as ex:list(ex.map(one,top))
+      with prog_lock:
+       checked[0]+=1
+       save(job,{'stage':f'Checking action {checked[0]}/{len(top)}','progress':round(.5+.07*checked[0]/max(1,len(top)),3)})
+    workers=2 if using_proxy else 4
+    with _TP(max_workers=workers) as ex:list(ex.map(one,top))
     for c in top:
      if c.get('_act'):
       for key in ('motion','flash','strobe','cuts'):
@@ -565,7 +587,14 @@ def start_make(b, previous=None):
     game_name,game_tags=detect_game();chat_sig=chat_ready()
     try:found,engine=ai_found(moments,yt_words,duration) if moments else find(p,duration,count,max_len,scan_report,language,DATA,min_len,False,yt_words,False,W,False,profile,focus_brief,include_phrases,exclude_phrases,game=game_name,heat=heat,chat=chat_sig,whole=flags['whole_pass'] or b.get('whole_pass') is True,rerank_on=flags['rerank'],fair=flags['fair_order'],quality=b.get('mode') in ('balanced','deep'),window=part_window)
     finally:beat['live']=False
-    found=choose(found,lambda c:lowres_section(url,c))
+    lr_whole=None
+    if duration<=2700:
+     save(job,{'stage':'Downloading low-res preview for action check','progress':.5})
+     lr_whole=lowres_whole(url)
+    try:
+     found=choose(found,(lambda c:(lr_whole,c['start'])) if lr_whole else (lambda c:lowres_section(url,c)),deadline_s=(None if lr_whole else (90 if using_proxy else 180)))
+    finally:
+     if lr_whole:Path(lr_whole).unlink(missing_ok=True)
     if not found:
      checkpoint_path.unlink(missing_ok=True)
      save(job,{'status':'done','stage':'No moments matched the transcript filters. Broaden the focus or required phrases.','progress':1,'clips':[],'elapsed_seconds':round(time.monotonic()-began,2)});return
@@ -615,18 +644,19 @@ def start_make(b, previous=None):
      for attempt in range(3):     # an FFmpeg crash on one section (seen on some FFmpeg 9.1 builds) must not lose the whole video
       try:
        with _yt({'format':(source_format(src_h) if attempt<2 else 'b[height<=720][ext=mp4]/b[height<=720]/b'),'merge_output_format':'mp4','outtmpl':str(DATA/(name+'.%(ext)s')),
+                 'external_downloader_args':{'ffmpeg_i':['-rw_timeout','15000000']},
                  'download_ranges':download_range_func(None,[(max(0,c['start']-PAD),c['end']+PAD)])}) as y:y.download([url])
        return name
       except Exception:
        if attempt==2:raise
        time.sleep(3*(attempt+1))
-    pool=ThreadPoolExecutor(max_workers=3);sections=[pool.submit(section,i,c) if not finished(i) else None for i,c in enumerate(found)]
+    pool=ThreadPoolExecutor(max_workers=2 if using_proxy else 3);sections=[pool.submit(section,i,c) if not finished(i) else None for i,c in enumerate(found)]
    for i,c in enumerate(found):
     if finished(i):
      used_titles_.add(str(completed[str(i)].get('title') or '').strip().casefold())
      done.append(completed[str(i)]);save(job,{'clips':list(done)})
      continue
-    save(job,{'stage':f'Preparing clip {i+1}/{len(found)}','phase':'prepare','clip_index':i+1})
+    save(job,{'stage':(f'Fetching clip section {i+1}/{len(found)}' if sections else f'Preparing clip {i+1}/{len(found)}'),'phase':'prepare','clip_index':i+1})
     if (not moments or exact_time) and c.get('transcript') and b.get('hook_enabled') is not False and not (c.get('hook') and c.get('hook_evidence')):      # the judge's hook is already backed by a quote: no second AI call
      try:
       import smart
@@ -760,6 +790,12 @@ def start_make(b, previous=None):
    checkpoint_path.unlink(missing_ok=True)
    for prev_id in checkpoint.get('_chain') or []:
     if isinstance(prev_id,str) and prev_id.isalnum():(DATA/(prev_id+'.resume.json')).unlink(missing_ok=True)
+   done_key=_source_key(b)
+   if done_key:
+    for rf in DATA.glob('*.resume.json'):
+     try:
+      if _source_key(json.loads(rf.read_text(encoding='utf-8')).get('request'))==done_key:rf.unlink(missing_ok=True)
+     except (OSError,ValueError):pass
    save(job,{'status':'done','stage':'Clips ready','phase':'complete','progress':1,'elapsed_seconds':round(time.monotonic()-began,1)})
   except Exception as e:      # plain words for the common failures (private video, no internet, disk full, FFmpeg missing...)
    import friendly;plain,original=friendly.explain(str(e)[-600:]);save(job,{'status':'error','error':plain,'error_detail':original})
@@ -944,6 +980,19 @@ def restore_frozen(job:str,index:int,body:dict):
   app.neon['save'](job,{'restored':restored})
   return {'job':child}
 
+def _source_key(obj):
+ if not isinstance(obj,dict):return ''
+ url=str(obj.get('url') or '').strip()
+ if url:
+  m=re.search(r'(?:youtu\.be/|v=|/live/|/shorts/)([A-Za-z0-9_-]{11})',url)
+  if m:return 'yt:'+m.group(1)
+  return 'url:'+url.split('?')[0].rstrip('/').lower()
+ sid=str(obj.get('id') or '').strip()
+ return 'id:'+sid if sid else ''
+
+def _active_make_jobs():
+ return [(jid,row) for jid,row in list(state.items()) if row.get('status')=='running' and row.get('kind') not in ('export','transcribe') and ('phase' in row or 'clips' in row or 'source' in row)]
+
 def _resolve_resume_chain(job):
  seen={job}
  record=state.get(job,{})
@@ -965,14 +1014,18 @@ def _job_resumable(job,record):
 
 @app.get('/make/resumable')
 def latest_resumable():
+ active=_active_make_jobs()
+ if active:
+  aid,arow=active[0]
+  return {'job':None,'active_job':aid,'title':arow.get('title') or (arow.get('source') or {}).get('url') or 'Running batch','stage':arow.get('stage') or ''}
  files=sorted(DATA.glob('*.resume.json'),key=lambda p:p.stat().st_mtime,reverse=True)
  for f in files:
   jid=f.name.split('.')[0]
   if len(jid)!=32 or not jid.isalnum():continue
   term_id,term_rec=_resolve_resume_chain(jid)
   if _job_resumable(term_id,term_rec):
-   return {'job':term_id,'title':term_rec.get('title') or (term_rec.get('source') or {}).get('url') or 'Interrupted batch','stage':term_rec.get('stage') or ''}
- return {'job':None}
+   return {'job':term_id,'active_job':None,'title':term_rec.get('title') or (term_rec.get('source') or {}).get('url') or 'Interrupted batch','stage':term_rec.get('stage') or ''}
+ return {'job':None,'active_job':None}
 
 @app.post('/make/{job}/resume')
 def resume_make(job:str):
@@ -984,6 +1037,12 @@ def resume_make(job:str):
   if record.get('status')!='error' or not path or not path.is_file():
    raise HTTPException(409,'No interrupted analysis checkpoint is available.')
   previous=json.loads(path.read_text(encoding='utf-8'))
+  req_key=_source_key(previous.get('request'))
+  if req_key:
+   for aid,arow in _active_make_jobs():
+    if _source_key(arow.get('source'))==req_key:
+     app.neon['save'](job,{'resumed_as':aid})
+     return {'job':aid}
   if previous.get('plan') and not (DATA/previous['plan']['media']).is_file():
    raise HTTPException(409,'The cached source is missing. Start a new batch.')
   chain=list(previous.get('_chain') or [])
@@ -991,6 +1050,14 @@ def resume_make(job:str):
   previous['_chain']=chain
   started=start_make(previous['request'],previous)
   app.neon['save'](job,{'resumed_as':started['job']})
+  if req_key:
+   for rf in DATA.glob('*.resume.json'):
+    oid=rf.name.split('.')[0]
+    if oid==job or len(oid)!=32 or not oid.isalnum():continue
+    try:
+     if _source_key(json.loads(rf.read_text(encoding='utf-8')).get('request'))==req_key and state.get(oid,{}).get('status')=='error':
+      app.neon['save'](oid,{'resumed_as':started['job']})
+    except (OSError,ValueError):pass
   return started
 
 @app.get('/make/{job}')

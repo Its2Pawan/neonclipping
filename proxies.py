@@ -19,6 +19,7 @@ import random
 import re
 import select
 import socket
+import ssl
 import threading
 import time
 import urllib.request
@@ -457,8 +458,8 @@ def fetch_github_proxies(data_dir, country='IN', force=False, fetcher=None):
     return collected
 
 
-def _tcp_alive(proxy_url, timeout=TCP_PROBE_TIMEOUT):
-    """Verify the proxy can actually open a tunnel to www.youtube.com:443 (HTTP CONNECT or SOCKS handshake)."""
+def _open_tunnel(proxy_url, host='www.youtube.com', port=443, timeout=TCP_PROBE_TIMEOUT):
+    """Open a socket tunneled through proxy_url to (host, port). Caller owns closing it."""
     s = None
     try:
         u = urlparse(proxy_url)
@@ -469,11 +470,11 @@ def _tcp_alive(proxy_url, timeout=TCP_PROBE_TIMEOUT):
             s = pysocks.socksocket()
             s.settimeout(timeout)
             s.set_proxy(stype, u.hostname, u.port, rdns=(scheme == 'socks5h'), username=u.username, password=u.password)
-            s.connect(('www.youtube.com', 443))
-            return proxy_url
+            s.connect((host, port))
+            return s
         s = socket.create_connection((u.hostname, u.port), timeout=timeout)
         s.settimeout(timeout)
-        req = 'CONNECT www.youtube.com:443 HTTP/1.1\r\nHost: www.youtube.com:443\r\n'
+        req = f'CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n'
         if u.username:
             import base64
             tok = base64.b64encode(f"{u.username}:{u.password or ''}".encode()).decode()
@@ -481,38 +482,80 @@ def _tcp_alive(proxy_url, timeout=TCP_PROBE_TIMEOUT):
         s.sendall((req + '\r\n').encode('latin1'))
         head = s.recv(128).split(b'\r\n', 1)[0]
         if re.match(rb'^HTTP/1\.[01]\s+200\b', head):
-            return proxy_url
+            return s
+        s.close()
         return None
     except Exception:
-        return None
-    finally:
         if s is not None:
             try:
                 s.close()
             except OSError:
                 pass
+        return None
+
+
+def _tcp_alive(proxy_url, timeout=TCP_PROBE_TIMEOUT):
+    """Verify the proxy opens a tunnel to www.youtube.com:443."""
+    s = _open_tunnel(proxy_url, timeout=timeout)
+    if s is None:
+        return None
+    try:
+        s.close()
+    except OSError:
+        pass
+    return proxy_url
+
+
+_TLS_CTX = ssl.create_default_context()
+
+
+def _https_alive(proxy_url, timeout=TCP_PROBE_TIMEOUT + 1.5):
+    """Verify tunnel + real TLS handshake + YouTube HTTP 204 latency; returns (seconds, proxy_url) or None."""
+    t0 = time.monotonic()
+    s = _open_tunnel(proxy_url, timeout=timeout)
+    if s is None:
+        return None
+    tls = None
+    try:
+        tls = _TLS_CTX.wrap_socket(s, server_hostname='www.youtube.com')
+        tls.settimeout(timeout)
+        tls.sendall(b'GET /generate_204 HTTP/1.1\r\nHost: www.youtube.com\r\nConnection: close\r\n\r\n')
+        head = tls.recv(128).split(b'\r\n', 1)[0]
+        if re.match(rb'^HTTP/1\.[01]\s+(?:204|200|30\d)\b', head):
+            return (round(time.monotonic() - t0, 3), proxy_url)
+        return None
+    except Exception:
+        return None
+    finally:
+        for sock in (tls, s):
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
 
 
 def filter_alive(candidates, limit=TCP_PROBE_LIMIT, max_results=20):
-    """Run a fast parallel tunnel handshake check across candidates so dead/fake proxies are skipped in ~5s."""
+    """Verify tunnel + TLS/HTTP YouTube reachability in parallel and return fastest proxies first."""
     sample = list(candidates[:limit])
     if not sample:
         return []
-    alive = []
+    hits = []
     ex = ThreadPoolExecutor(max_workers=min(48, len(sample)))
-    futures = [ex.submit(_tcp_alive, p) for p in sample]
+    futures = [ex.submit(_https_alive, p) for p in sample]
     try:
-        for fut in as_completed(futures, timeout=TCP_PROBE_TIMEOUT + 2.5):
+        for fut in as_completed(futures, timeout=TCP_PROBE_TIMEOUT + 3.0):
             res = fut.result()
             if res:
-                alive.append(res)
-                if len(alive) >= max_results:
+                hits.append(res)
+                if len(hits) >= max_results:
                     break
     except Exception:
         pass
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
-    return alive
+    hits.sort(key=lambda item: item[0])
+    return [p for _, p in hits]
 
 
 def candidates(data_dir, country=None, force_refresh=False, probe_tcp=True, fetcher=None):
@@ -688,6 +731,8 @@ class LocalProxyBridge:
                 remote.set_proxy(stype, up_host, up_port, rdns=rdns, username=up_user, password=up_pass)
                 remote.connect((dst_host, dst_port))
                 client.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n')
+                client.settimeout(60)
+                remote.settimeout(60)
                 rest = buf.split(b'\r\n\r\n', 1)[1]
                 if rest:
                     remote.sendall(rest)

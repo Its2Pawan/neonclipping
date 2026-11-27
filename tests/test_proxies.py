@@ -106,6 +106,12 @@ class ParseAndValidationTests(unittest.TestCase):
         self.assertIsNone(proxies._tcp_alive(f'http://127.0.0.1:{port}', timeout=2.0))
         self.assertEqual(proxies._tcp_alive(f'http://127.0.0.1:{port}', timeout=2.0), f'http://127.0.0.1:{port}')
 
+    def test_filter_alive_ranks_fastest_tls_proxy_first(self):
+        latencies = {'http://slow:80': (1.4, 'http://slow:80'), 'socks4://fast:1080': (0.2, 'socks4://fast:1080'), 'http://dead:80': None}
+        with mock.patch.object(proxies, '_https_alive', side_effect=lambda p, **kw: latencies[p]):
+            ranked = proxies.filter_alive(['http://slow:80', 'http://dead:80', 'socks4://fast:1080'], limit=3, max_results=5)
+        self.assertEqual(ranked, ['socks4://fast:1080', 'http://slow:80'])
+
 
 class RotationAndBridgeTests(unittest.TestCase):
     def setUp(self):
@@ -268,7 +274,7 @@ class SettingsEndpointTests(unittest.TestCase):
                     self.assertEqual(bad.status_code, 400)
 
                     with mock.patch.object(proxies, '_fetch_url', return_value='[{"proxy":"http://103.50.1.1:8080","protocol":"http","geolocation":{"country":"IN"}}]'), \
-                         mock.patch.object(proxies, '_tcp_alive', side_effect=lambda p, **kw: p):
+                         mock.patch.object(proxies, '_https_alive', side_effect=lambda p, **kw: (0.25, p)):
                         ref = client.post('/ytdl/proxies/refresh', json={'proxy_country': 'IN'})
                     self.assertEqual(ref.status_code, 200, ref.text)
                     self.assertEqual(ref.json()['fetched'], 1)

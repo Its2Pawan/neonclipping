@@ -453,3 +453,43 @@ class MultiPlatformAndAutoUpload(unittest.TestCase):
                     os.environ.pop("NEONCLIPPING_DATA_DIR", None)
                 else:
                     os.environ["NEONCLIPPING_DATA_DIR"] = old_dir
+
+    def test_resume_deduplicates_running_same_source_and_hides_stale_resumable(self):
+        import importlib
+        import os
+        from fastapi.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_dir = os.environ.get("NEONCLIPPING_DATA_DIR")
+            os.environ["NEONCLIPPING_DATA_DIR"] = tmp
+            try:
+                import app as A
+                A = importlib.reload(A)
+                j1 = "aaaa1111222233334444555566667777"
+                j2 = "bbbb1111222233334444555566667777"
+                j_run = "cccc1111222233334444555566667777"
+                for jid, si in ((j1, "one"), (j2, "two")):
+                    (Path(tmp) / f"{jid}.resume.json").write_text(
+                        json.dumps({"request": {"url": f"https://youtu.be/jwttobgA1w0?si={si}"}}),
+                        encoding="utf-8",
+                    )
+                    A.state[jid] = {"id": jid, "status": "error", "error": "failed", "source": {"url": f"https://youtu.be/jwttobgA1w0?si={si}"}}
+                A.state[j_run] = {
+                    "id": j_run,
+                    "status": "running",
+                    "stage": "Preparing clip 1/6",
+                    "phase": "prepare",
+                    "source": {"url": "https://youtu.be/jwttobgA1w0"},
+                    "title": "Running Video",
+                }
+                with TestClient(A.app) as client:
+                    resumable = client.get("/make/resumable").json()
+                    self.assertIsNone(resumable["job"])
+                    self.assertEqual(resumable["active_job"], j_run)
+                    resumed = client.post(f"/make/{j2}/resume").json()
+                    self.assertEqual(resumed["job"], j_run)
+            finally:
+                if old_dir is None:
+                    os.environ.pop("NEONCLIPPING_DATA_DIR", None)
+                else:
+                    os.environ["NEONCLIPPING_DATA_DIR"] = old_dir
