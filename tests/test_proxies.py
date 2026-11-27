@@ -88,6 +88,24 @@ class ParseAndValidationTests(unittest.TestCase):
         self.assertEqual(proxies.infer_country('ERROR: [youtube] x: The uploader has not made this video available in your country This video is available in India.'), 'IN')
         self.assertEqual(proxies.infer_country('This video is available in United States.'), 'US')
 
+    def test_http_connect_tunnel_probe_rejects_404_and_accepts_200(self):
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.bind(('127.0.0.1', 0))
+        srv.listen(2)
+        port = srv.getsockname()[1]
+
+        def serve():
+            for reply in (b'HTTP/1.1 404 Not Found\r\n\r\n', b'HTTP/1.1 200 Connection Established\r\n\r\n'):
+                c, _ = srv.accept()
+                c.recv(512)
+                c.sendall(reply)
+                c.close()
+            srv.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+        self.assertIsNone(proxies._tcp_alive(f'http://127.0.0.1:{port}', timeout=2.0))
+        self.assertEqual(proxies._tcp_alive(f'http://127.0.0.1:{port}', timeout=2.0), f'http://127.0.0.1:{port}')
+
 
 class RotationAndBridgeTests(unittest.TestCase):
     def setUp(self):

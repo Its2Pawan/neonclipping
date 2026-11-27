@@ -144,7 +144,7 @@ class YDL:
         runtimes = js_runtimes()
         if runtimes and 'js_runtimes' not in base:
             base['js_runtimes'] = runtimes
-        max_tries = 12 if cfg['proxy_auto_rotate'] else 1
+        max_tries = 18 if cfg['proxy_auto_rotate'] else 1
         last_err = first_error
         blocked = False
         for proxy_url in pool[:max_tries]:
@@ -152,9 +152,11 @@ class YDL:
             ctx = proxies.LocalProxyBridge(proxy_url) if use_bridge else nullcontext(proxy_url)
             with ctx as active_proxy:
                 opts = {**base, 'proxy': active_proxy}
-                if opts.get('skip_download') and len(pool) > 1:
-                    opts['socket_timeout'] = min(float(opts.get('socket_timeout') or 15), 10)
-                    opts.setdefault('extractor_retries', 0)
+                if len(pool) > 1:
+                    opts['extractor_retries'] = 0
+                    if opts.get('skip_download'):
+                        opts['retries'] = 0
+                        opts['socket_timeout'] = min(float(opts.get('socket_timeout') or 12), 8)
                 try:
                     with yt_dlp.YoutubeDL(opts) as y:
                         result = fn(y)

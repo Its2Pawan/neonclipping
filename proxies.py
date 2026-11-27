@@ -9,7 +9,7 @@ Supports:
 
 Public rotated proxies are always used WITHOUT browser/file cookies so user accounts are never sent over public nodes.
 """
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 import ipaddress
@@ -28,8 +28,8 @@ SOCKS_SCHEMES = ('socks4', 'socks4a', 'socks5', 'socks5h')
 SUPPORTED_COUNTRIES = ('IN', 'US', 'GB', 'SG', 'DE', 'CA', 'AU', 'JP', 'FR', 'BR', 'AUTO', 'ALL')
 CACHE_TTL = 1800          # refresh GitHub raw lists at most every 30 minutes unless requested
 BAD_TTL = 600             # cooldown for proxies that timed out or failed against YouTube
-TCP_PROBE_TIMEOUT = 2.0
-TCP_PROBE_LIMIT = 80
+TCP_PROBE_TIMEOUT = 3.0
+TCP_PROBE_LIMIT = 180
 
 COUNTRY_ALIASES = {
     'india': 'IN',
@@ -402,18 +402,19 @@ def _fetch_url(url, timeout=10):
 
 
 def _prioritize_protocols(pool):
-    """Order proxies with http and socks5 first (best YouTube + FFmpeg compatibility), then socks4."""
-    http = [p for p in pool if p.startswith('http://')]
+    """Balance protocols (socks5, http, socks4) so working YouTube tunnels appear early."""
     s5 = [p for p in pool if p.startswith(('socks5://', 'socks5h://'))]
-    rest = [p for p in pool if not p.startswith(('http://', 'socks5://', 'socks5h://'))]
-    random.shuffle(http)
-    random.shuffle(s5)
-    random.shuffle(rest)
-    # Interleave http & socks5 cleanly so both FFmpeg and SOCKS paths get fresh coverage
+    http = [p for p in pool if p.startswith('http://')]
+    s4 = [p for p in pool if p.startswith(('socks4://', 'socks4a://'))]
+    rest = [p for p in pool if not p.startswith(('http://', 'socks5://', 'socks5h://', 'socks4://', 'socks4a://'))]
+    for grp in (s5, http, s4, rest):
+        random.shuffle(grp)
     merged = []
-    for i in range(max(len(http), len(s5))):
+    for i in range(max(len(s5), len(http), len(s4), 0)):
         if i < len(s5):
             merged.append(s5[i])
+        if i < len(s4):
+            merged.append(s4[i])
         if i < len(http):
             merged.append(http[i])
     return merged + rest
@@ -457,26 +458,60 @@ def fetch_github_proxies(data_dir, country='IN', force=False, fetcher=None):
 
 
 def _tcp_alive(proxy_url, timeout=TCP_PROBE_TIMEOUT):
+    """Verify the proxy can actually open a tunnel to www.youtube.com:443 (HTTP CONNECT or SOCKS handshake)."""
+    s = None
     try:
         u = urlparse(proxy_url)
-        with socket.create_connection((u.hostname, u.port), timeout=timeout):
+        scheme = (u.scheme or '').lower()
+        if scheme in SOCKS_SCHEMES:
+            import socks as pysocks
+            stype = pysocks.SOCKS4 if scheme.startswith('socks4') else pysocks.SOCKS5
+            s = pysocks.socksocket()
+            s.settimeout(timeout)
+            s.set_proxy(stype, u.hostname, u.port, rdns=(scheme == 'socks5h'), username=u.username, password=u.password)
+            s.connect(('www.youtube.com', 443))
             return proxy_url
-    except OSError:
+        s = socket.create_connection((u.hostname, u.port), timeout=timeout)
+        s.settimeout(timeout)
+        req = 'CONNECT www.youtube.com:443 HTTP/1.1\r\nHost: www.youtube.com:443\r\n'
+        if u.username:
+            import base64
+            tok = base64.b64encode(f"{u.username}:{u.password or ''}".encode()).decode()
+            req += f'Proxy-Authorization: Basic {tok}\r\n'
+        s.sendall((req + '\r\n').encode('latin1'))
+        head = s.recv(128).split(b'\r\n', 1)[0]
+        if re.match(rb'^HTTP/1\.[01]\s+200\b', head):
+            return proxy_url
         return None
+    except Exception:
+        return None
+    finally:
+        if s is not None:
+            try:
+                s.close()
+            except OSError:
+                pass
 
 
 def filter_alive(candidates, limit=TCP_PROBE_LIMIT, max_results=20):
-    """Run a fast parallel TCP handshake filter across candidates so dead IPs are skipped in ~2s."""
+    """Run a fast parallel tunnel handshake check across candidates so dead/fake proxies are skipped in ~5s."""
     sample = list(candidates[:limit])
     if not sample:
         return []
     alive = []
-    with ThreadPoolExecutor(max_workers=min(24, len(sample))) as ex:
-        for res in ex.map(_tcp_alive, sample):
+    ex = ThreadPoolExecutor(max_workers=min(48, len(sample)))
+    futures = [ex.submit(_tcp_alive, p) for p in sample]
+    try:
+        for fut in as_completed(futures, timeout=TCP_PROBE_TIMEOUT + 2.5):
+            res = fut.result()
             if res:
                 alive.append(res)
                 if len(alive) >= max_results:
                     break
+    except Exception:
+        pass
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
     return alive
 
 
